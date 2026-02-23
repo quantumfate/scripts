@@ -1,19 +1,11 @@
 #!/bin/bash
 VT=${VT:-1}
 
-case "$XDG_SESSION_DESKTOP" in
-Hyprland)
-  hyprshutdown --vt "$VT"
-  ;;
-Niri)
-  systemd-run --no-block sh -c "sleep 3 && uwsm stop; sleep 1 && chvt $VT"
-  niri msg action quit --skip-confirmation
-  ;;
-Sway)
-  systemd-run --no-block sh -c "sleep 3 && uwsm stop; sleep 1 && chvt $VT"
-  swaymsg exit
-  ;;
-*)
-  systemd-run --no-block sh -c "sleep 3 && uwsm stop; sleep 1 && chvt $VT"
-  ;;
-esac
+if [ "$XDG_SESSION_TYPE" = "x11" ]; then
+  # X11 logout logic here
+  exit 0
+fi
+
+# Wayland: schedule VT switch as safety net for NVIDIA
+# sudo systemd-run --no-block sh -c "sleep 6 && chvt $VT" // not needed atm
+uwsm stop
