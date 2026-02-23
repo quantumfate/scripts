@@ -2,14 +2,14 @@
 VT=${VT:-1}
 
 case "${XDG_SESSION_DESKTOP,,}" in
-hyprland)
+Hyprland)
   hyprshutdown --vt "$VT"
   ;;
-niri)
+Niri)
   sudo systemd-run --no-block sh -c "sleep 1 && chvt $VT"
   niri msg action quit
   ;;
-sway)
+Sway)
   sudo systemd-run --no-block sh -c "sleep 1 && chvt $VT"
   swaymsg exit
   ;;
