@@ -7,7 +7,7 @@ Hyprland)
   ;;
 Niri)
   systemd-run --no-block sh -c "sleep 3 && uwsm stop; sleep 1 && chvt $VT"
-  niri msg action quit
+  niri msg action quit --skip-confirmation
   ;;
 Sway)
   systemd-run --no-block sh -c "sleep 3 && uwsm stop; sleep 1 && chvt $VT"
