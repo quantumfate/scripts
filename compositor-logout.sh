@@ -1,7 +1,7 @@
 #!/bin/bash
 VT=${VT:-1}
 
-case "${XDG_SESSION_DESKTOP,,}" in
+case "$XDG_SESSION_DESKTOP" in
 Hyprland)
   hyprshutdown --vt "$VT"
   ;;
