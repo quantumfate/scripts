@@ -81,6 +81,8 @@ elif [[ "$1" == "--get-with-icon" ]]; then
   echo "$(get_brightness)  $(get_icon) "
 elif [[ "$1" == "-r" ]]; then
   restore_brightness
+elif [[ "$1" == "-s" ]]; then
+  save_brightness
 else
   get_brightness
 fi
