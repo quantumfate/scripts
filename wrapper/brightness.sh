@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 APP_NAME=Brightness
 has_hyprsunset=false
+CACHE_DIR="/tmp/hyprsunset"
+CACHE_FILE="$CACHE_DIR/brightness"
+
+mkdir -p "$CACHE_DIR"
+
 if [[ "$XDG_CURRENT_DESKTOP" == "Hyprland" ]] && command -v hyprsunset &>/dev/null; then
   has_hyprsunset=true
 fi
 
 get_brightness() {
   if [ "$has_hyprsunset" = true ]; then
-    # gamma is 0-100 in hyprsunset, parse from profile output
     hyprctl hyprsunset gamma | cut -d. -f1
   else
     echo $(($(brightnessctl g) * 100 / $(brightnessctl m)))
@@ -27,6 +31,10 @@ get_icon() {
   fi
 }
 
+save_brightness() {
+  get_brightness >"$CACHE_FILE"
+}
+
 notify_user() {
   notify-send --app-name="$APP_NAME" -h string:x-canonical-private-synchronous:sys-notify -u low "$(get_icon)   $(get_brightness)%"
 }
@@ -37,6 +45,7 @@ inc_brightness() {
   else
     brightnessctl s +10%
   fi
+  save_brightness
   notify_user
 }
 
@@ -46,7 +55,20 @@ dec_brightness() {
   else
     brightnessctl s 10%-
   fi
+  save_brightness
   notify_user
+}
+
+restore_brightness() {
+  if [ "$has_hyprsunset" = true ]; then
+    if [[ -f "$CACHE_FILE" ]]; then
+      hyprctl hyprsunset gamma "$(cat "$CACHE_FILE")"
+    else
+      hyprctl hyprsunset gamma 100
+    fi
+  else
+    brightnessctl -r
+  fi
 }
 
 if [[ "$1" == "--get" ]]; then
@@ -57,6 +79,8 @@ elif [[ "$1" == "--dec" ]]; then
   dec_brightness
 elif [[ "$1" == "--get-with-icon" ]]; then
   echo "$(get_brightness)  $(get_icon) "
+elif [[ "$1" == "-r" ]]; then
+  restore_brightness
 else
   get_brightness
 fi
