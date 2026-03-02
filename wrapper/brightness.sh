@@ -41,9 +41,9 @@ notify_user() {
 
 inc_brightness() {
   if [ "$has_hyprsunset" = true ]; then
-    hyprctl hyprsunset gamma +10
+    hyprctl hyprsunset gamma +5
   else
-    brightnessctl s +10%
+    brightnessctl s +5%
   fi
   save_brightness
   notify_user
@@ -51,9 +51,9 @@ inc_brightness() {
 
 dec_brightness() {
   if [ "$has_hyprsunset" = true ]; then
-    hyprctl hyprsunset gamma -10
+    hyprctl hyprsunset gamma -5
   else
-    brightnessctl s 10%-
+    brightnessctl s 5%-
   fi
   save_brightness
   notify_user
