@@ -8,7 +8,7 @@ CACHE_FILE="$CACHE_DIR/brightness"
 
 mkdir -p "$CACHE_DIR"
 
-if [[ "$XDG_CURRENT_DESKTOP" == "Hyprland" ]] && command -v hyprsunset &>/dev/null; then
+if [[ "${XDG_CURRENT_DESKTOP:-}" == "Hyprland" ]] && command -v hyprsunset &>/dev/null; then
   has_hyprsunset=true
 fi
 
@@ -72,19 +72,12 @@ restore_brightness() {
     brightnessctl -r
   fi
 }
-
-if [[ "$1" == "--get" ]]; then
-  get_brightness
-elif [[ "$1" == "--inc" ]]; then
-  inc_brightness
-elif [[ "$1" == "--dec" ]]; then
-  dec_brightness
-elif [[ "$1" == "--get-with-icon" ]]; then
-  echo "$(get_brightness)  $(get_icon) "
-elif [[ "$1" == "-r" ]]; then
-  restore_brightness
-elif [[ "$1" == "-s" ]]; then
-  save_brightness
-else
-  get_brightness
-fi
+case "${1:-}" in
+--get) get_brightness ;;
+--inc) inc_brightness ;;
+--dec) dec_brightness ;;
+--get-with-icon) echo "$(get_brightness)  $(get_icon) " ;;
+-r) restore_brightness ;;
+-s) save_brightness ;;
+*) get_brightness ;;
+esac
