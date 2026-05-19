@@ -1,4 +1,6 @@
 #!/bin/bash
+
+set -euo pipefail
 VT=${VT:-1}
 
 if [ "$XDG_SESSION_TYPE" = "x11" ]; then

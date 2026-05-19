@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
 DND_MODE="do-not-disturb"
 ENABLED=""
 DISABLED=""
@@ -20,4 +21,3 @@ else
     echo "${ENABLED}"
   fi
 fi
-

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+
+set -euo pipefail
 APP_NAME=Brightness
 has_hyprsunset=false
 CACHE_DIR="/tmp/hyprsunset"

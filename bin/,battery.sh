@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 ############ Variables ############
 enable_battery=false
 battery_charging=false

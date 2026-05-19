@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 WALLPAPER_DIR="$HOME/.config/hypr/wallpapers/"
 CURRENT_WALL=$(hyprctl hyprpaper listloaded)
 
@@ -8,4 +10,3 @@ WALLPAPER=$(find "$WALLPAPER_DIR" -type f ! -name "$(basename "$CURRENT_WALL")" 
 
 # Apply the selected wallpaper
 hyprctl hyprpaper reload ,"$WALLPAPER"
-
