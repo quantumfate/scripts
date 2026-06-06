@@ -72,7 +72,7 @@ def focus_title(title):
             "-q",
             "eval",
             f"""
-            hl.dispatch(hl.dsp.focus({{ window = [[title:{title}]] }}))
+            hl.dispatch(hl.dsp.focus({{ window = [[title:^({title})$]] }}))
             hl.dispatch(hl.dsp.window.bring_to_top())
             """,
         ],
