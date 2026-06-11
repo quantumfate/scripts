@@ -61,13 +61,6 @@ dec_brightness() {
   notify_user
 }
 
-#######################################
-# Sets the brightness and saves the
-# previous value that can be restored
-# with `brightnessctl -r`
-# Arguments:
-#   - the brightness value
-#######################################
 set_brightness() {
   save_brightness
   if [ "$has_hyprsunset" = true ]; then
