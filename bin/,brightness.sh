@@ -61,6 +61,23 @@ dec_brightness() {
   notify_user
 }
 
+#######################################
+# Sets the brightness and saves the
+# previous value that can be restored
+# with `brightnessctl -r`
+# Arguments:
+#   - the brightness value
+#######################################
+set_brightness() {
+  save_brightness
+  if [ "$has_hyprsunset" = true ]; then
+    hyprctl hyprsunset gamma "$1"
+  else
+    brightnessctl -s "$1"
+  fi
+  notify_user
+}
+
 restore_brightness() {
   if [ "$has_hyprsunset" = true ]; then
     if [[ -f "$CACHE_FILE" ]]; then
@@ -76,6 +93,7 @@ case "${1:-}" in
 --get) get_brightness ;;
 --inc) inc_brightness ;;
 --dec) dec_brightness ;;
+--set) set_brightness "$2" ;;
 --get-with-icon) echo "$(get_brightness)  $(get_icon) " ;;
 -r) restore_brightness ;;
 -s) save_brightness ;;
