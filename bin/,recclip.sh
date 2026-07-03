@@ -19,6 +19,24 @@
 
 set -euo pipefail
 
+# Require core dependencies; report every missing one at once.
+require() {
+  local missing=()
+  local cmd
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    local msg="recclip: missing required command(s): ${missing[*]}"
+    echo "$msg" >&2
+    command -v notify-send >/dev/null 2>&1 && \
+      notify-send -u critical "recclip" "$msg" || true
+    exit 127
+  fi
+}
+
+require gpu-screen-recorder slurp wl-copy
+
 outdir="$(xdg-user-dir VIDEOS 2>/dev/null || echo "$HOME/Videos")"
 mkdir -p "$outdir"
 
