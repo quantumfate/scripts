@@ -37,6 +37,20 @@ require() {
 
 require gpu-screen-recorder slurp wl-copy
 
+pidfile="${XDG_RUNTIME_DIR:-/tmp}/recclip.pid"
+
+# Toggle: if a recorder is already running, this invocation stops it.
+# SIGINT makes gpu-screen-recorder finalize the file; the recording process
+# (still alive, blocked in `wait`) then runs its EXIT trap and copies.
+if [ -f "$pidfile" ]; then
+  rpid="$(cat "$pidfile" 2>/dev/null || true)"
+  if [ -n "$rpid" ] && kill -0 "$rpid" 2>/dev/null; then
+    kill -INT "$rpid"
+    exit 0
+  fi
+  rm -f "$pidfile" # stale
+fi
+
 outdir="$(xdg-user-dir VIDEOS 2>/dev/null || echo "$HOME/Videos")"
 mkdir -p "$outdir"
 
@@ -86,11 +100,18 @@ copy_to_clipboard() {
     notify-send "recclip" "Recording copied to clipboard"$'\n'"$file" || true
 }
 
-# gpu-screen-recorder finalizes the file on SIGINT (Ctrl-C); copy afterward.
-trap 'copy_to_clipboard' EXIT
-
 args=("${target[@]}" -k h264 -f 60 -cursor yes)
 [ -n "$audio" ] && args+=(-a "$audio")
 args+=(-o "$file")
 
-gpu-screen-recorder "${args[@]}"
+# Run detached so a later invocation can signal us to stop. The recorder
+# finalizes the file on SIGINT; copy afterward. Clean the pidfile on exit.
+gpu-screen-recorder "${args[@]}" &
+rpid=$!
+echo "$rpid" >"$pidfile"
+trap 'rm -f "$pidfile"; copy_to_clipboard' EXIT
+
+command -v notify-send >/dev/null && \
+  notify-send "recclip" "Recording started — run recclip again to stop" || true
+
+wait "$rpid" || true
