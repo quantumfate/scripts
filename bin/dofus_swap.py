@@ -14,12 +14,18 @@ Workflow:
     ./dofus_swap.py run                          # detector
 """
 
-import argparse, io, json, re, subprocess, sys, time
+import argparse, io, json, os, re, subprocess, sys, time
 from pathlib import Path
 import imagehash
 from PIL import Image
 
 CFG = Path.home() / ".config/dofus-swap.json"
+# Shared Dofus team source of truth, written by the Hyprland config and the
+# Quickshell UI (see hypr/lib/store.lua, quickshell services/DofusState.qml).
+# The roster (which characters to match/focus) is read from here by default, so
+# editing the team in the UI immediately changes what this detector watches.
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local/state"))
+TEAM_FILE = STATE_HOME / "dofus/team.json"
 POLL = 0.5
 IDLE_POLL = 1.5  # slower tick when no Dofus window is focused
 DOFUS_CLASS = "Dofus.x64"
@@ -102,6 +108,19 @@ def pick_region():
     x, y = map(int, pos.split(","))
     w, h = map(int, dim.split("x"))
     return {"left": x, "top": y, "width": w, "height": h}
+
+
+def load_roster():
+    """Lowercased names of the active team from the shared SoT store, in order.
+
+    Returns None if the file is missing/unreadable, in which case callers fall
+    back to matching against every learned reference (no roster filter).
+    """
+    try:
+        data = json.loads(TEAM_FILE.read_text())
+        return [n.lower() for n in data["teams"][data["selected"]]]
+    except Exception:
+        return None
 
 
 def load_cfg():
@@ -189,7 +208,17 @@ def cmd_run(args):
         sys.exit(f"No learned hashes. Run: {sys.argv[0]} learn <Name> per character.")
     refs = {n: imagehash.hex_to_hash(v) for n, v in refs_raw.items()}
 
-    roster = set(n.lower() for n in args.characters) if args.characters else None
+    # Explicit --characters overrides the SoT; otherwise the roster is the
+    # active team from team.json, re-read each rescan so live edits apply.
+    override = set(n.lower() for n in args.characters) if args.characters else None
+
+    def current_roster():
+        if override is not None:
+            return override
+        names = load_roster()
+        return set(names) if names else None
+
+    roster = current_roster()
     windows = discover(roster)
     if not windows:
         print(
@@ -213,6 +242,7 @@ def cmd_run(args):
         try:
             now = time.time()
             if now >= next_rescan:
+                roster = current_roster()  # pick up live team edits from the UI
                 windows = discover(roster)
                 next_rescan = now + RESCAN_S
 
@@ -312,7 +342,7 @@ def main():
         "--characters",
         nargs="+",
         default=None,
-        help="Roster filter, short names (e.g. Reminiscer Sayer).",
+        help="Override roster filter (default: active team from team.json).",
     )
     pr.add_argument(
         "--debug",
