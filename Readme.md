@@ -8,6 +8,10 @@ quantumfate desktop, alongside the
 Most are small `,name.sh` wrappers invoked from Hyprland keybinds. A few
 integrate with the shared state / UI:
 
+- `bin/qfs` — "quantumfate shell": wraps the Quickshell IPC surface
+  (`qfs theme cycle`, `qfs window rename "..."`, `qfs show`, …). Zsh completion
+  `_qfs` lives in the quickshell repo's `completions/`.
+
 - `bin/dofus_swap.py` — Dofus auto turn-swap detector. Reads its roster from the
   shared team source of truth (`$XDG_STATE_HOME/dofus/team.json`), the same file
   the Quickshell UI edits, so team changes take effect live.
