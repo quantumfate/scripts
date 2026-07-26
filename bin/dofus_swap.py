@@ -33,7 +33,10 @@ TITLE_RE = re.compile(r"^Dofus\s+(.+)$")
 RESCAN_S = 5.0
 DEBOUNCE_S = 0.4
 HASH_MAX = 10  # max phash hamming distance to accept match
+HASH_MARGIN = 12  # best must beat the runner-up by this many bits to swap
 MIN_BRIGHTNESS = 5.0  # below this avg, treat as popup-not-visible
+STABLE_GAP_S = 0.15  # re-grab delay when learning; frame must be steady
+STABLE_MAX = 4  # two learn grabs must be within this hamming distance
 
 
 def shot(region):
@@ -162,7 +165,14 @@ def cmd_learn(args):
     bright = avg_brightness(img)
     if bright < MIN_BRIGHTNESS:
         sys.exit(f"Region looks dark (avg={bright:.1f}). Popup visible? Aborting.")
-    h = str(phash(img))
+    # Reject mid-animation frames: a second grab must match the first, else the
+    # popup is still fading/sliding and the hash would be junk (this is what let
+    # bad references slip in before).
+    time.sleep(STABLE_GAP_S)
+    h0, h1 = phash(img), phash(shot(region))
+    if (h0 - h1) > STABLE_MAX:
+        sys.exit(f"Frame not steady (Δ={h0 - h1}). Capture at popup peak; retry.")
+    h = str(h0)
     cfg.setdefault("hashes", {})[args.name.lower()] = h
     save_cfg(cfg)
     out = Path("/tmp/dofus-swap")
@@ -203,10 +213,17 @@ def cmd_inspect(args):
 def cmd_run(args):
     cfg = load_cfg()
     region = require_region(cfg)
-    refs_raw = cfg.get("hashes", {})
-    if not refs_raw:
+    if not cfg.get("hashes"):
         sys.exit(f"No learned hashes. Run: {sys.argv[0]} learn <Name> per character.")
-    refs = {n: imagehash.hex_to_hash(v) for n, v in refs_raw.items()}
+
+    # Reference hashes, re-read each rescan so a `learn` while the detector is
+    # running takes effect without a restart (they used to be frozen at startup,
+    # so a re-learned character kept missing until the loop was restarted).
+    def load_refs():
+        raw = load_cfg().get("hashes", {})
+        return {n: imagehash.hex_to_hash(v) for n, v in raw.items()}
+
+    refs = load_refs()
 
     # Explicit --characters overrides the SoT; otherwise the roster is the
     # active team from team.json, re-read each rescan so live edits apply.
@@ -244,6 +261,7 @@ def cmd_run(args):
             if now >= next_rescan:
                 roster = current_roster()  # pick up live team edits from the UI
                 windows = discover(roster)
+                refs = load_refs()  # pick up characters (re-)learned since startup
                 next_rescan = now + RESCAN_S
 
             if not active_is_dofus():
@@ -267,12 +285,14 @@ def cmd_run(args):
             h = phash(img)
             scored = sorted(((n, h - r) for n, r in refs.items()), key=lambda kv: kv[1])
             best_name, best_d = scored[0]
+            second_d = scored[1][1] if len(scored) > 1 else 999  # runner-up gap
             if args.debug:
                 top = ", ".join(f"{n}={d}" for n, d in scored[:3])
-                print(f"[{time.strftime('%H:%M:%S')}] avg={bright:5.1f} {top}")
+                print(f"[{time.strftime('%H:%M:%S')}] avg={bright:5.1f} {top}", flush=True)
 
             if (
                 best_d <= HASH_MAX
+                and (second_d - best_d) >= HASH_MARGIN
                 and best_name in windows
                 and (now - last_swap) >= DEBOUNCE_S
             ):
@@ -317,6 +337,9 @@ NOTES:
 
 
 def main():
+    # Line-buffer so `run --debug` piped to a log streams live (block buffering
+    # otherwise hides ticks until an 8KB buffer fills).
+    sys.stdout.reconfigure(line_buffering=True)
     ap = argparse.ArgumentParser(
         description="Dofus auto turn-swap (template match).",
         epilog=USAGE,
