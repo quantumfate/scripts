@@ -2,8 +2,8 @@
 
 Standalone CLI helpers on `$PATH`, used across my desktop. Part of the
 quantumfate desktop, alongside the
-[**hypr**](https://github.com/quantumfate/hypr) compositor config and the
-[**quickshell**](https://github.com/quantumfate/quickshell) UI.
+[**hypr**](https://codeberg.org/quantumfate/hypr) compositor config and the
+[**quickshell**](https://codeberg.org/quantumfate/quickshell) UI.
 
 Most are small `,name.sh` wrappers invoked from Hyprland keybinds. A few
 integrate with the shared state / UI:
@@ -33,4 +33,4 @@ integrate with the shared state / UI:
   ```
 
 How the shared state + IPC bridges work:
-[quickshell/ARCHITECTURE.md](https://github.com/quantumfate/quickshell/blob/main/ARCHITECTURE.md).
+[quickshell/ARCHITECTURE.md](https://codeberg.org/quantumfate/quickshell/blob/main/ARCHITECTURE.md).
