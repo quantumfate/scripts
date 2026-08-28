@@ -22,6 +22,7 @@ EXCLUDED = {"Journal", "QuickAdd Packages", "Templates", "__files", "__scripts",
 ANCHOR = re.compile(r"^>\s*\^indexof-[\w-]+\s*$")
 CALLOUT_START = re.compile(r"^>\s*\[!")
 H1 = re.compile(r"^#\s+\S")
+H2 = re.compile(r"^##\s+\S")
 
 
 def split_frontmatter(lines):
@@ -64,7 +65,11 @@ def find_callout_blocks(lines, start):
 
 
 def normalize(lines):
-    """Return rewritten lines, or None if nothing to do."""
+    """Return rewritten lines, or None if the note is already correct.
+
+    The blocks belong at the foot of the H1 preamble, directly above the first
+    H2, so that whatever the note says about itself stays visible above them.
+    """
     body_start = split_frontmatter(lines)
 
     h1 = next((i for i in range(body_start, len(lines)) if H1.match(lines[i])), None)
@@ -75,34 +80,35 @@ def normalize(lines):
     if not blocks:
         return None
 
-    # Already canonical: blocks sit directly under the H1, separated by one blank line.
-    if blocks[0][0] == h1 + 2 and lines[h1 + 1].strip() == "":
-        contiguous = all(b[0] == blocks[i][1] + 1 for i, b in enumerate(blocks[1:]))
-        if contiguous:
-            return None
+    # Without an H2 there is no preamble to sit at the foot of; the plugin's own
+    # end-of-note placement is then already the best answer.
+    if not any(H2.match(line) for line in lines[h1 + 1 :]):
+        return None
 
     moved = []
     for bs, be in blocks:
         moved.extend(lines[bs:be])
         moved.append("")
 
-    # Drop the originals back-to-front so earlier indices stay valid.
+    # Drop the originals back-to-front so earlier indices stay valid, absorbing
+    # one adjacent blank line so removal leaves no gap behind.
     rest = list(lines)
     for bs, be in reversed(blocks):
-        # Absorb one trailing blank line so removal does not leave a gap.
-        end = be + 1 if be < len(rest) and rest[be].strip() == "" else be
-        del rest[bs:end]
+        if be < len(rest) and rest[be].strip() == "":
+            del rest[bs : be + 1]
+        elif bs > 0 and rest[bs - 1].strip() == "":
+            del rest[bs - 1 : be]
+        else:
+            del rest[bs:be]
 
     h1 = next(i for i in range(split_frontmatter(rest), len(rest)) if H1.match(rest[i]))
-    out = rest[: h1 + 1] + [""] + moved + rest[h1 + 1 :]
+    h2 = next(i for i in range(h1 + 1, len(rest)) if H2.match(rest[i]))
 
-    # Collapse runs of blank lines introduced by the splice.
-    collapsed = []
-    for line in out:
-        if line.strip() == "" and collapsed and collapsed[-1].strip() == "":
-            continue
-        collapsed.append(line)
-    return collapsed
+    if rest[h2 - 1].strip() != "":
+        moved.insert(0, "")
+    out = rest[:h2] + moved + rest[h2:]
+
+    return None if out == lines else out
 
 
 def iter_notes(vault):
