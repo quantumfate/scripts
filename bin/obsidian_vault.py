@@ -130,8 +130,10 @@ class ObsidianCli:
         )
 
     def app_running(self) -> bool:
+        # The app runs as `electron<N> /usr/lib/obsidian/app.asar`, so there is no
+        # process named "obsidian" to match. The bracket keeps pgrep off this probe.
         probe = subprocess.run(
-            ["pgrep", "-x", "obsidian"], capture_output=True, text=True
+            ["pgrep", "-f", "[o]bsidian/app.asar"], capture_output=True, text=True
         )
         return probe.returncode == 0
 
