@@ -32,5 +32,26 @@ integrate with the shared state / UI:
   ,obsidian-cli-wrapper.sh ensure-topic Topic/Sub --dry-run        # plan index notes
   ```
 
+- `bin/obsidian_linear_sync.py` + `bin/obsidian-linear-sync` — one-way mirror of
+  Linear into the same vault. Projects, milestones and issues become index notes
+  under `Projects/`, so the index-notes plugin renders the hierarchy; sub-issues
+  are filed under their parent. Linear is the source of truth and nothing is ever
+  deleted. The API key is read from Proton Pass at runtime (`Productivity` /
+  `linear.app` / `api_key`); a locked vault notifies and exits. Runs every five
+  minutes from `obsidian-linear-sync.timer`, deployed by the `obsidian_linear`
+  role in **system-config**.
+
+  Because tags are derived from Linear's naming, a rename moves a whole subtree.
+  The previous hierarchy is kept in `$XDG_STATE_HOME/obsidian/linear.json` so the
+  next run can diff it and rename the old tag prefix wherever it appears —
+  including on notes the sync never created.
+
+  ```
+  obsidian-linear-sync                       # dry run
+  obsidian-linear-sync --apply               # sync now
+  obsidian-linear-sync --project lance.nvim --apply
+  obsidian-linear-sync --apply --force       # rewrite managed blocks regardless
+  ```
+
 How the shared state + IPC bridges work:
 [quickshell/ARCHITECTURE.md](https://codeberg.org/quantumfate/quickshell/blob/main/ARCHITECTURE.md).
