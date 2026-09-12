@@ -1014,7 +1014,8 @@ kill_project() {
     if [[ -n ${TMUX-} ]]; then
         name=$(project_of_session "$(visible_session)")
     else
-        pid=$(focused_pid) && info=$(client_under "$pid") || die "kill: no project window focused"
+        pid=$(focused_pid) || die "kill: no project window focused"
+        info=$(client_under "$pid") || die "kill: no project window focused"
         cpid=${info%%$'\t'*}
         name=$(client_project "$cpid") || die "kill: that window shows no project"
     fi
