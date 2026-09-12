@@ -17,7 +17,14 @@ from pathlib import Path
 DEFAULT_VAULT = Path.home() / "Documents/Obsidian/Main"
 
 # Mirrors index-notes' own exclude_folders setting.
-EXCLUDED = {"Journal", "QuickAdd Packages", "Templates", "__files", "__scripts", ".obsidian"}
+EXCLUDED = {
+    "Journal",
+    "QuickAdd Packages",
+    "Templates",
+    "__files",
+    "__scripts",
+    ".obsidian",
+}
 
 ANCHOR = re.compile(r"^>\s*\^indexof-[\w-]+\s*$")
 CALLOUT_START = re.compile(r"^>\s*\[!")
@@ -55,7 +62,11 @@ def find_callout_blocks(lines, start):
         # Offsets of each callout header within the run; the run may also open
         # with continuation lines belonging to no header.
         heads = [j for j in range(run_start, run_end) if CALLOUT_START.match(lines[j])]
-        bounds = [run_start] + heads if heads and heads[0] != run_start else heads or [run_start]
+        bounds = (
+            [run_start] + heads
+            if heads and heads[0] != run_start
+            else heads or [run_start]
+        )
         bounds = sorted(set(bounds))
 
         for k, bs in enumerate(bounds):
@@ -122,8 +133,12 @@ def iter_notes(vault):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--vault", type=Path, default=DEFAULT_VAULT)
-    ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
-    ap.add_argument("paths", nargs="*", type=Path, help="specific notes; default: whole vault")
+    ap.add_argument(
+        "--apply", action="store_true", help="write changes (default: dry run)"
+    )
+    ap.add_argument(
+        "paths", nargs="*", type=Path, help="specific notes; default: whole vault"
+    )
     args = ap.parse_args()
 
     targets = args.paths or iter_notes(args.vault)
@@ -143,7 +158,9 @@ def main():
             print(f"would move  {path}")
 
     if not args.apply and changed:
-        print(f"\n{changed} note(s) would change. Re-run with --apply.", file=sys.stderr)
+        print(
+            f"\n{changed} note(s) would change. Re-run with --apply.", file=sys.stderr
+        )
     return 0
 
 

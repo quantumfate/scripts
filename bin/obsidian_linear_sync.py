@@ -129,6 +129,7 @@ query Milestones($after: String) {
 # --------------------------------------------------------------------------
 # Credential
 
+
 class AuthError(RuntimeError):
     """Proton Pass could not hand over the API key."""
 
@@ -137,7 +138,17 @@ def notify(title: str, body: str, urgency: str = "critical") -> None:
     """Best-effort desktop notification; a headless run must not fail on this."""
     try:
         subprocess.run(
-            ["notify-send", "-u", urgency, "-i", "dialog-password", "-t", "0", title, body],
+            [
+                "notify-send",
+                "-u",
+                urgency,
+                "-i",
+                "dialog-password",
+                "-t",
+                "0",
+                title,
+                body,
+            ],
             check=False,
             capture_output=True,
         )
@@ -153,8 +164,16 @@ def read_api_key() -> str:
 
     try:
         proc = subprocess.run(
-            ["pass-cli", "item", "view", "--vault-name", PASS_VAULT,
-             "--item-title", PASS_ITEM, "--output=json"],
+            [
+                "pass-cli",
+                "item",
+                "view",
+                "--vault-name",
+                PASS_VAULT,
+                "--item-title",
+                PASS_ITEM,
+                "--output=json",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -168,7 +187,9 @@ def read_api_key() -> str:
     if proc.returncode != 0 or not proc.stdout.strip():
         # A forced logout prints to stdout and still exits non-zero; either way
         # the recovery is the same interactive login.
-        raise AuthError((proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["no session"])
+        raise AuthError(
+            (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["no session"]
+        )
 
     try:
         item = json.loads(proc.stdout)["item"]["content"]
@@ -185,6 +206,7 @@ def read_api_key() -> str:
 
 # --------------------------------------------------------------------------
 # Linear API
+
 
 def graphql(key: str, query: str, variables: dict) -> dict:
     request = urllib.request.Request(
@@ -222,7 +244,7 @@ def fetch_all(key: str, query: str, root: str) -> list[dict]:
 def desktop_url(web_url: str) -> str:
     """Deep link that opens the Linear desktop app instead of a browser tab."""
     if web_url.startswith(WEB_PREFIX):
-        return APP_PREFIX + web_url[len(WEB_PREFIX):]
+        return APP_PREFIX + web_url[len(WEB_PREFIX) :]
     return web_url
 
 
@@ -258,7 +280,9 @@ def milestone_topic(issue: dict) -> str | None:
     return f"{PROJECTS_TAG}/{slug(issue['project']['name'])}/{slug(milestone['name'])}"
 
 
-def issue_topic(issue: dict, by_ident: dict[str, dict], seen: frozenset = frozenset()) -> str:
+def issue_topic(
+    issue: dict, by_ident: dict[str, dict], seen: frozenset = frozenset()
+) -> str:
     """Where an issue hangs: under its parent issue, else its milestone, else the project.
 
     Parent wins over milestone so the sub-issue tree stays navigable; the
@@ -341,7 +365,7 @@ def demote_headings(markdown: str) -> str:
             in_fence = not in_fence
         elif not in_fence and (m := HEADING_RE.match(line)):
             level = min(len(m.group(1)) + shift, 6)
-            line = "#" * level + m.group(2) + line[m.end():]
+            line = "#" * level + m.group(2) + line[m.end() :]
         out.append(line)
     return "\n".join(out)
 
@@ -430,7 +454,7 @@ def merge_frontmatter(text: str, fields: dict) -> str:
         else:
             out.append(line)
     out.extend(f"{k}: {v}" for k, v in remaining.items())
-    return f"{match.group(1)}{chr(10).join(out)}{match.group(3)}{text[match.end():]}"
+    return f"{match.group(1)}{chr(10).join(out)}{match.group(3)}{text[match.end() :]}"
 
 
 def issue_block(issue: dict) -> str:
@@ -444,8 +468,11 @@ def issue_block(issue: dict) -> str:
     if milestone:
         summary += f" · {milestone}"
 
-    lines = [BLOCK_START, summary,
-             f"> [Open {issue['identifier']} in Linear]({desktop_url(issue['url'])})"]
+    lines = [
+        BLOCK_START,
+        summary,
+        f"> [Open {issue['identifier']} in Linear]({desktop_url(issue['url'])})",
+    ]
     parent = issue.get("parent")
     if parent:
         lines.append(f"> Sub-issue of {parent['identifier']}: {parent['title']}")
@@ -466,8 +493,11 @@ def project_block(project: dict) -> str:
     if project.get("targetDate"):
         summary += f" · target {project['targetDate']}"
 
-    lines = [BLOCK_START, summary,
-             f"> [Open project in Linear]({desktop_url(project.get('url', ''))})"]
+    lines = [
+        BLOCK_START,
+        summary,
+        f"> [Open project in Linear]({desktop_url(project.get('url', ''))})",
+    ]
 
     for part in (project.get("description"), project.get("content")):
         if (part or "").strip():
@@ -516,7 +546,7 @@ def merge_block(text: str, block: str) -> str:
     start = text.find(BLOCK_START)
     end = text.find(BLOCK_END)
     if start != -1 and end > start:
-        return text[:start] + block + text[end + len(BLOCK_END):]
+        return text[:start] + block + text[end + len(BLOCK_END) :]
 
     h1 = H1_RE.search(text)
     if not h1:
@@ -533,7 +563,7 @@ def render_title(text: str, title: str) -> str:
         return text
     line_end = text.find("\n", h1.start())
     line_end = len(text) if line_end == -1 else line_end
-    return text[:h1.start()] + f"# {title}" + text[line_end:]
+    return text[: h1.start()] + f"# {title}" + text[line_end:]
 
 
 def write_note(path: Path, title: str, fields: dict, block: str) -> None:
@@ -546,11 +576,13 @@ def write_note(path: Path, title: str, fields: dict, block: str) -> None:
 # --------------------------------------------------------------------------
 # Planning
 
+
 class Create:
     """A note to bring into being, with the content to write once it exists."""
 
-    def __init__(self, title: str, tags: list[str], fields: dict, block: str,
-                 heading: str) -> None:
+    def __init__(
+        self, title: str, tags: list[str], fields: dict, block: str, heading: str
+    ) -> None:
         self.title = title
         self.tags = tags
         self.fields = fields
@@ -561,8 +593,14 @@ class Create:
 class Update:
     """An existing note whose managed region has drifted from Linear."""
 
-    def __init__(self, path: Path, fields: dict, block: str, heading: str,
-                 retag: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        fields: dict,
+        block: str,
+        heading: str,
+        retag: list[str] | None = None,
+    ) -> None:
         self.path = path
         self.fields = fields
         self.block = block
@@ -609,35 +647,54 @@ def load_hierarchy(cfg: Config) -> dict:
         stored = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
-    return stored.get("topics", {}) if stored.get("version") == HIERARCHY_VERSION else {}
+    return (
+        stored.get("topics", {}) if stored.get("version") == HIERARCHY_VERSION else {}
+    )
 
 
 def save_hierarchy(cfg: Config, topics: dict[str, str], previous: dict) -> None:
     """Merge this run's topics over the stored ones; a filtered run sees only part."""
     merged = {**previous, **topics}
     hierarchy_path(cfg).parent.mkdir(parents=True, exist_ok=True)
-    hierarchy_path(cfg).write_text(json.dumps({
-        "version": HIERARCHY_VERSION,
-        "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "topics": merged,
-    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    hierarchy_path(cfg).write_text(
+        json.dumps(
+            {
+                "version": HIERARCHY_VERSION,
+                "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "topics": merged,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
-def plan_migrations(previous: dict[str, str], current: dict[str, str]) -> list[tuple[str, str]]:
+def plan_migrations(
+    previous: dict[str, str], current: dict[str, str]
+) -> list[tuple[str, str]]:
     """Topic paths that moved since the last run, deepest first.
 
     Deepest first so a nested rename is applied before the ancestor rename that
     would otherwise rewrite its prefix out from under it.
     """
-    moved = [(old, current[key]) for key, old in previous.items()
-             if key in current and current[key] != old]
+    moved = [
+        (old, current[key])
+        for key, old in previous.items()
+        if key in current and current[key] != old
+    ]
 
     # Renaming one milestone moves every issue beneath it, and each of those
     # reads as its own move. Keeping only the shallowest rename that explains a
     # descendant turns 127 lines into the one rename that actually happened.
     def implied(old: str, new: str) -> bool:
-        return any(old.startswith(f"{ancestor}/") and new == retag_prefix(old, ancestor, target)
-                   for ancestor, target in moved if ancestor != old)
+        return any(
+            old.startswith(f"{ancestor}/")
+            and new == retag_prefix(old, ancestor, target)
+            for ancestor, target in moved
+            if ancestor != old
+        )
 
     kept = [(old, new) for old, new in moved if not implied(old, new)]
     return sorted(kept, key=lambda pair: pair[0].count("/"), reverse=True)
@@ -647,7 +704,7 @@ def retag_prefix(tag: str, old: str, new: str) -> str:
     """Rewrite a tag that is, or sits beneath, a renamed topic."""
     if tag == old:
         return new
-    return new + tag[len(old):] if tag.startswith(f"{old}/") else tag
+    return new + tag[len(old) :] if tag.startswith(f"{old}/") else tag
 
 
 def notes_by_key(cfg: Config, key: str, kind: str) -> dict[str, Path]:
@@ -679,9 +736,17 @@ def synced_tags(fm: dict) -> list[str]:
     return [t for t in fm.get("tags", []) if t.startswith(f"{PROJECTS_TAG}/")]
 
 
-def plan_note(plan: Plan, path: Path | None, title: str, tags: list[str],
-              fields: dict, block: str, stamp: str, force: bool = False,
-              heading: str | None = None) -> None:
+def plan_note(
+    plan: Plan,
+    path: Path | None,
+    title: str,
+    tags: list[str],
+    fields: dict,
+    block: str,
+    stamp: str,
+    force: bool = False,
+    heading: str | None = None,
+) -> None:
     """Queue a create or an update, skipping notes Linear has not moved.
 
     `title` is the filename stem, frozen at creation; `heading` is the H1, which
@@ -701,13 +766,21 @@ def plan_note(plan: Plan, path: Path | None, title: str, tags: list[str],
     plan.updates.append(Update(path, fields, block, heading, retag))
 
 
-def build_plan(cfg: Config, projects: list[dict], milestones: list[dict],
-               issues: list[dict], only: str | None = None, force: bool = False) -> Plan:
+def build_plan(
+    cfg: Config,
+    projects: list[dict],
+    milestones: list[dict],
+    issues: list[dict],
+    only: str | None = None,
+    force: bool = False,
+) -> Plan:
     plan = Plan()
     topics_now: dict[str, str] = {}
     milestones_by_project: dict[str, list[dict]] = {}
     for milestone in sorted(milestones, key=lambda m: m.get("sortOrder") or 0):
-        milestones_by_project.setdefault(milestone["project"]["id"], []).append(milestone)
+        milestones_by_project.setdefault(milestone["project"]["id"], []).append(
+            milestone
+        )
     store = scan_vault(cfg)
     topics = store["topics"]
     project_notes = notes_by_key(cfg, "linear_project_id", "project")
@@ -716,10 +789,15 @@ def build_plan(cfg: Config, projects: list[dict], milestones: list[dict],
 
     wanted_projects = {p["id"] for p in projects}
     if only:
-        wanted_projects = {p["id"] for p in projects
-                           if only.lower() in (p["name"].lower(), slug(p["name"]).lower())}
+        wanted_projects = {
+            p["id"]
+            for p in projects
+            if only.lower() in (p["name"].lower(), slug(p["name"]).lower())
+        }
 
-    def existing(by_id: dict[str, Path], key: str, topic: str, suffix: str) -> Path | None:
+    def existing(
+        by_id: dict[str, Path], key: str, topic: str, suffix: str
+    ) -> Path | None:
         """Prefer the id match; fall back to whatever already owns the tag."""
         if key in by_id:
             return by_id[key]
@@ -735,9 +813,12 @@ def build_plan(cfg: Config, projects: list[dict], milestones: list[dict],
         plan_note(
             plan,
             existing(project_notes, project["id"], topic, "meta_idx"),
-            safe_title(project["name"]), [f"{topic}/meta_idx"],
-            project_fields(project), project_block(project),
-            scalar(project.get("updatedAt")), force,
+            safe_title(project["name"]),
+            [f"{topic}/meta_idx"],
+            project_fields(project),
+            project_block(project),
+            scalar(project.get("updatedAt")),
+            force,
         )
 
         for milestone in milestones_by_project.get(project["id"], []):
@@ -746,9 +827,12 @@ def build_plan(cfg: Config, projects: list[dict], milestones: list[dict],
             plan_note(
                 plan,
                 existing(milestone_notes, milestone["id"], ms_topic, "meta_idx"),
-                safe_title(milestone["name"]), [f"{ms_topic}/meta_idx"],
-                milestone_fields(milestone, project), milestone_block(milestone, project),
-                scalar(milestone.get("updatedAt")), force,
+                safe_title(milestone["name"]),
+                [f"{ms_topic}/meta_idx"],
+                milestone_fields(milestone, project),
+                milestone_block(milestone, project),
+                scalar(milestone.get("updatedAt")),
+                force,
             )
 
     by_ident = {i["identifier"]: i for i in issues if i.get("project")}
@@ -765,16 +849,23 @@ def build_plan(cfg: Config, projects: list[dict], milestones: list[dict],
         seen.add(issue["id"])
         topics_now[f"issue:{issue['id']}"] = issue_topic(issue, by_ident)
         plan_note(
-            plan, issue_notes.get(issue["id"]),
-            issue_title(issue), issue_tags(issue, by_ident, parents),
-            issue_fields(issue), issue_block(issue),
-            scalar(issue.get("updatedAt")), force,
+            plan,
+            issue_notes.get(issue["id"]),
+            issue_title(issue),
+            issue_tags(issue, by_ident, parents),
+            issue_fields(issue),
+            issue_block(issue),
+            scalar(issue.get("updatedAt")),
+            force,
             heading=safe_title(issue["title"]),
         )
 
     # A filtered run has only seen part of Linear, so it cannot judge orphans.
     for linear_id, path in issue_notes.items() if not only else []:
-        if linear_id in seen or read_frontmatter(path).get("linear_state") == "orphaned":
+        if (
+            linear_id in seen
+            or read_frontmatter(path).get("linear_state") == "orphaned"
+        ):
             continue
         plan.orphans.append(path)
 
@@ -785,6 +876,7 @@ def build_plan(cfg: Config, projects: list[dict], milestones: list[dict],
 
 # --------------------------------------------------------------------------
 # Execution
+
 
 def describe(plan: Plan) -> None:
     for old, new in plan.migrations:
@@ -802,7 +894,9 @@ def describe(plan: Plan) -> None:
         print(f"  skipped {plan.skipped_no_project} issue(s) with no Linear project")
 
 
-def migrate_tags(cfg: Config, cli: ObsidianCli, migrations: list[tuple[str, str]]) -> int:
+def migrate_tags(
+    cfg: Config, cli: ObsidianCli, migrations: list[tuple[str, str]]
+) -> int:
     """Rename moved topic prefixes on every note that carries them.
 
     Runs before anything else so the rest of the plan sees the new paths. This
@@ -829,7 +923,9 @@ def apply_plan(cfg: Config, plan: Plan) -> None:
     cli = ObsidianCli(cfg)
     needs_app = plan.creates or plan.migrations or any(u.retag for u in plan.updates)
     if needs_app and not cli.app_running():
-        raise RuntimeError("Obsidian is not running; note creation needs Templater via its CLI")
+        raise RuntimeError(
+            "Obsidian is not running; note creation needs Templater via its CLI"
+        )
 
     if plan.migrations:
         for old, new in plan.migrations:
@@ -860,23 +956,36 @@ def apply_plan(cfg: Config, plan: Plan) -> None:
 
     for path in plan.orphans:
         text = path.read_text(encoding="utf-8")
-        path.write_text(merge_frontmatter(text, {
-            "linear_state": "orphaned",
-            "linear_orphaned_at": datetime.now(timezone.utc).date().isoformat(),
-        }), encoding="utf-8")
+        path.write_text(
+            merge_frontmatter(
+                text,
+                {
+                    "linear_state": "orphaned",
+                    "linear_orphaned_at": datetime.now(timezone.utc).date().isoformat(),
+                },
+            ),
+            encoding="utf-8",
+        )
         print(f"  orphan  {path.name}")
 
 
-def cmd_sync(cfg: Config, apply: bool, encrypt: bool, only: str | None = None,
-             force: bool = False) -> int:
+def cmd_sync(
+    cfg: Config,
+    apply: bool,
+    encrypt: bool,
+    only: str | None = None,
+    force: bool = False,
+) -> int:
     key = read_api_key()
     projects = fetch_all(key, PROJECTS_QUERY, "projects")
     milestones = fetch_all(key, MILESTONES_QUERY, "projectMilestones")
     issues = fetch_all(key, ISSUES_QUERY, "issues")
     plan = build_plan(cfg, projects, milestones, issues, only, force)
 
-    print(f"{len(projects)} project(s), {len(milestones)} milestone(s), "
-          f"{len(issues)} issue(s) from Linear")
+    print(
+        f"{len(projects)} project(s), {len(milestones)} milestone(s), "
+        f"{len(issues)} issue(s) from Linear"
+    )
     if plan.empty():
         describe(plan)
         if apply:
@@ -886,8 +995,12 @@ def cmd_sync(cfg: Config, apply: bool, encrypt: bool, only: str | None = None,
 
     if not apply:
         describe(plan)
-        pending = (len(plan.creates) + len(plan.updates) + len(plan.orphans)
-                   + len(plan.migrations))
+        pending = (
+            len(plan.creates)
+            + len(plan.updates)
+            + len(plan.orphans)
+            + len(plan.migrations)
+        )
         print(f"\n{pending} change(s) planned. Re-run with --apply.", file=sys.stderr)
         return 0
 
@@ -902,18 +1015,33 @@ def main(argv: list[str] | None = None) -> int:
         prog="obsidian_linear_sync",
         description=__doc__.splitlines()[0],
     )
-    parser.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
-    parser.add_argument("--no-encrypt", action="store_true", help="skip the tags.json.gpg copy")
-    parser.add_argument("--force", action="store_true",
-                        help="rewrite managed regions even when Linear reports no change")
-    parser.add_argument("--project", metavar="NAME",
-                        help="only sync this Linear project (name or slug); skips orphan checks")
+    parser.add_argument(
+        "--apply", action="store_true", help="write changes (default: dry run)"
+    )
+    parser.add_argument(
+        "--no-encrypt", action="store_true", help="skip the tags.json.gpg copy"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="rewrite managed regions even when Linear reports no change",
+    )
+    parser.add_argument(
+        "--project",
+        metavar="NAME",
+        help="only sync this Linear project (name or slug); skips orphan checks",
+    )
     args = parser.parse_args(argv)
 
     cfg = Config()
     try:
-        return cmd_sync(cfg, args.apply, encrypt=not args.no_encrypt, only=args.project,
-                        force=args.force)
+        return cmd_sync(
+            cfg,
+            args.apply,
+            encrypt=not args.no_encrypt,
+            only=args.project,
+            force=args.force,
+        )
     except AuthError as exc:
         notify(
             "Linear sync: Proton Pass locked",

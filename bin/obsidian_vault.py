@@ -31,7 +31,9 @@ from pathlib import Path
 
 DEFAULT_VAULT = Path.home() / "Documents" / "Obsidian" / "Main"
 DEFAULT_ROOT = "Zettelkasten"
-DEFAULT_RECIPIENT = "45EE29D4AA966DFD"  # Leon Connor Holm's GPG key (gpg --list-secret-keys)
+DEFAULT_RECIPIENT = (
+    "45EE29D4AA966DFD"  # Leon Connor Holm's GPG key (gpg --list-secret-keys)
+)
 STORE_NAME = "obsidian"
 SCAN_GLOB = "*.md"
 
@@ -52,13 +54,20 @@ PROPERTY_RETRY_STEP = 0.5
 # --------------------------------------------------------------------------
 # Configuration (all overridable via env, none secret)
 
+
 class Config:
     def __init__(self) -> None:
-        self.vault: Path = Path(os.environ.get("OBSIDIAN_VAULT", str(DEFAULT_VAULT))).resolve()
+        self.vault: Path = Path(
+            os.environ.get("OBSIDIAN_VAULT", str(DEFAULT_VAULT))
+        ).resolve()
         self.root: str = os.environ.get("OBSIDIAN_ROOT", DEFAULT_ROOT)
         self.cli: str = os.environ.get("OBSIDIAN_CLI", "obsidian")
-        self.recipient: str = os.environ.get("OBSIDIAN_GPG_RECIPIENT", DEFAULT_RECIPIENT)
-        state_home = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
+        self.recipient: str = os.environ.get(
+            "OBSIDIAN_GPG_RECIPIENT", DEFAULT_RECIPIENT
+        )
+        state_home = Path(
+            os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
+        )
         self.store_dir: Path = state_home / STORE_NAME
         self.plain_store: Path = self.store_dir / "tags.json"
         self.enc_store: Path = self.store_dir / "tags.json.gpg"
@@ -73,6 +82,7 @@ class Config:
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 TAG_VALUE_RE = re.compile(r"'([^']+)'|\"([^\"]+)\"|([\w/\-.]+)")
+
 
 def parse_frontmatter(text: str) -> dict:
     """Return the frontmatter block as a dict (tags always a list)."""
@@ -115,6 +125,7 @@ def read_frontmatter(path: Path) -> dict:
 # --------------------------------------------------------------------------
 # Obsidian CLI
 
+
 class ObsidianCli:
     """Thin wrapper over the running app's CLI, always bound to the vault."""
 
@@ -137,7 +148,9 @@ class ObsidianCli:
         )
         return probe.returncode == 0
 
-    def create_from_template(self, template: str, rel_path: str, open_file: bool) -> None:
+    def create_from_template(
+        self, template: str, rel_path: str, open_file: bool
+    ) -> None:
         """Create a note via Templater (fills note_id/note_type/date from the template)."""
         proc = self._run(
             "templater:create-from-template",
@@ -146,7 +159,9 @@ class ObsidianCli:
             f"open={'true' if open_file else 'false'}",
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"templater:create-from-template failed: {proc.stderr.strip() or proc.stdout.strip()}")
+            raise RuntimeError(
+                f"templater:create-from-template failed: {proc.stderr.strip() or proc.stdout.strip()}"
+            )
         target = self.cfg.vault / f"{rel_path}.md"
         for _ in range(int(PROPERTY_RETRY_S / PROPERTY_RETRY_STEP)):
             if target.exists():
@@ -162,7 +177,13 @@ class ObsidianCli:
         value = ",".join(tags)
         deadline = time.monotonic() + PROPERTY_RETRY_S
         while True:
-            proc = self._run("property:set", f"path={path_arg}", "name=tags", f"value={value}", "type=list")
+            proc = self._run(
+                "property:set",
+                f"path={path_arg}",
+                "name=tags",
+                f"value={value}",
+                "type=list",
+            )
             if proc.returncode == 0 and "Set tags" in proc.stdout:
                 return
             if time.monotonic() >= deadline:
@@ -174,6 +195,7 @@ class ObsidianCli:
 
 # --------------------------------------------------------------------------
 # Tag-tree inference
+
 
 def humanize(slug: str) -> str:
     """Turn a tag slug into a display title, keeping acronyms (GPG-Keys -> GPG Keys)."""
@@ -200,8 +222,14 @@ def slug_last(path: str) -> str:
 class NoteAction:
     """One bootstrap step: create a new note, or add an index tag to an existing one."""
 
-    def __init__(self, kind: str, title: str, tags: list[str], note_type: str = "moc",
-                 open_file: bool = False) -> None:
+    def __init__(
+        self,
+        kind: str,
+        title: str,
+        tags: list[str],
+        note_type: str = "moc",
+        open_file: bool = False,
+    ) -> None:
         self.kind = kind  # "create" | "add_tags"
         self.title = title
         self.tags = tags
@@ -214,7 +242,9 @@ class NoteAction:
         return f"add tags [{', '.join(self.tags)}] to existing '{self.title}'"
 
 
-def _ensure_index(cfg: Config, topics: dict, topic: str, suffix: str) -> NoteAction | None:
+def _ensure_index(
+    cfg: Config, topics: dict, topic: str, suffix: str
+) -> NoteAction | None:
     """One action (or None) so the topic's <suffix> index note exists."""
     field = "meta_idx_note" if suffix == "meta_idx" else "idx_note"
     other_field = "idx_note" if suffix == "meta_idx" else "meta_idx_note"
@@ -235,7 +265,9 @@ def _ensure_index(cfg: Config, topics: dict, topic: str, suffix: str) -> NoteAct
     return NoteAction("create", unique, [f"{topic}/{suffix}"])
 
 
-def plan_topic(cfg: Config, topics: dict, tag_path: str, chain: bool) -> list[NoteAction]:
+def plan_topic(
+    cfg: Config, topics: dict, tag_path: str, chain: bool
+) -> list[NoteAction]:
     """Infer the index notes missing for a topic, deepest ancestor first."""
     path = tag_path.strip("/")
     for suffix in (META_SUFFIX, IDX_SUFFIX):
@@ -260,6 +292,7 @@ def plan_topic(cfg: Config, topics: dict, tag_path: str, chain: bool) -> list[No
 # --------------------------------------------------------------------------
 # Store
 
+
 def _frontmatter_of(cfg: Config, path: Path) -> dict:
     return read_frontmatter(path)
 
@@ -283,14 +316,24 @@ def scan_vault(cfg: Config) -> dict:
             "tags": tags,
         }
         for tag in tags:
-            entry = tag_index.setdefault(tag, {"kind": "leaf", "topic": tag, "count": 0, "notes": []})
+            entry = tag_index.setdefault(
+                tag, {"kind": "leaf", "topic": tag, "count": 0, "notes": []}
+            )
             kind = split_topic(tag)
             if kind:
                 entry["kind"] = kind[1]
                 entry["topic"] = kind[0]
             entry["count"] += 1
             entry["notes"].append(title)
-            topics.setdefault(entry["topic"], {"title": None, "idx_note": None, "meta_idx_note": None, "leaf_count": 0})
+            topics.setdefault(
+                entry["topic"],
+                {
+                    "title": None,
+                    "idx_note": None,
+                    "meta_idx_note": None,
+                    "leaf_count": 0,
+                },
+            )
 
     for tag, entry in tag_index.items():
         topic = entry["topic"]
@@ -303,7 +346,9 @@ def scan_vault(cfg: Config) -> dict:
             info["leaf_count"] = entry["count"]
 
     for path, info in topics.items():
-        info["title"] = info["meta_idx_note"] or info["idx_note"] or humanize(slug_last(path))
+        info["title"] = (
+            info["meta_idx_note"] or info["idx_note"] or humanize(slug_last(path))
+        )
         info["parent"] = path.rpartition("/")[0]
         info["depth"] = len(path.split("/"))
 
@@ -327,6 +372,7 @@ def scan_vault(cfg: Config) -> dict:
 
 def _build_tree(topics: dict) -> dict:
     """Nest topics into a tree by '/' prefix (roots are the empty-parent topics)."""
+
     def child(path: str) -> str:
         return path.split("/")[-1]
 
@@ -340,7 +386,10 @@ def _build_tree(topics: dict) -> dict:
         }
         children = {}
         for other_path, other in sorted(topics.items()):
-            if other_path.startswith(path + "/") and "/" not in other_path[len(path) + 1:]:
+            if (
+                other_path.startswith(path + "/")
+                and "/" not in other_path[len(path) + 1 :]
+            ):
                 children[child(other_path)] = node(other_path, other)
         if children:
             n["children"] = children
@@ -358,9 +407,19 @@ def _encrypt(cfg: Config) -> None:
     if not cfg.recipient:
         return
     proc = subprocess.run(
-        ["gpg", "--batch", "--yes", "--output", str(cfg.enc_store),
-         "--recipient", cfg.recipient, "--encrypt", str(cfg.plain_store)],
-        capture_output=True, text=True,
+        [
+            "gpg",
+            "--batch",
+            "--yes",
+            "--output",
+            str(cfg.enc_store),
+            "--recipient",
+            cfg.recipient,
+            "--encrypt",
+            str(cfg.plain_store),
+        ],
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"gpg encrypt failed: {proc.stderr.strip()}")
@@ -369,7 +428,8 @@ def _encrypt(cfg: Config) -> None:
 def _decrypt(cfg: Config) -> dict:
     proc = subprocess.run(
         ["gpg", "--batch", "--quiet", "--decrypt", str(cfg.enc_store)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"gpg decrypt failed: {proc.stderr.strip()}")
@@ -387,7 +447,9 @@ def load_store(cfg: Config) -> dict:
 
 def save_store(cfg: Config, data: dict, encrypt: bool) -> None:
     cfg.store_dir.mkdir(parents=True, exist_ok=True)
-    cfg.plain_store.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    cfg.plain_store.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     if encrypt and cfg.recipient:
         _encrypt(cfg)
 
@@ -395,10 +457,13 @@ def save_store(cfg: Config, data: dict, encrypt: bool) -> None:
 # --------------------------------------------------------------------------
 # Commands
 
+
 def cmd_sync(cfg: Config, encrypt: bool) -> int:
     data = scan_vault(cfg)
     save_store(cfg, data, encrypt)
-    print(f"synced {data['note_count']} notes, {data['topic_count']} topics -> {cfg.plain_store}")
+    print(
+        f"synced {data['note_count']} notes, {data['topic_count']} topics -> {cfg.plain_store}"
+    )
     if encrypt and cfg.recipient:
         print(f"encrypted -> {cfg.enc_store} (gpg recipient {cfg.recipient})")
     return 0
@@ -436,14 +501,20 @@ def cmd_status(cfg: Config) -> int:
     return 0
 
 
-def _execute(cfg: Config, cli: ObsidianCli, actions: list[NoteAction], dry_run: bool) -> None:
+def _execute(
+    cfg: Config, cli: ObsidianCli, actions: list[NoteAction], dry_run: bool
+) -> None:
     for action in actions:
         if dry_run:
             print(f"[dry-run] {action.describe()}")
             continue
         if action.kind == "create":
             rel = f"{cfg.root}/{action.title}"
-            cli.create_from_template(TEMPLATES.get(action.note_type, TEMPLATES["atomic"]), rel, action.open_file)
+            cli.create_from_template(
+                TEMPLATES.get(action.note_type, TEMPLATES["atomic"]),
+                rel,
+                action.open_file,
+            )
             cli.set_tags(rel, action.tags)
         elif action.kind == "add_tags":
             path = cfg.vault_root / f"{action.title}.md"
@@ -453,8 +524,17 @@ def _execute(cfg: Config, cli: ObsidianCli, actions: list[NoteAction], dry_run: 
         print(f"  {action.describe()}")
 
 
-def cmd_create(cfg: Config, note_type: str, title: str, tag_path: str, open_file: bool,
-               chain: bool, dry_run: bool, encrypt: bool, extra_tags: list[str]) -> int:
+def cmd_create(
+    cfg: Config,
+    note_type: str,
+    title: str,
+    tag_path: str,
+    open_file: bool,
+    chain: bool,
+    dry_run: bool,
+    encrypt: bool,
+    extra_tags: list[str],
+) -> int:
     live = scan_vault(cfg)
     actions = plan_topic(cfg, live["topics"], tag_path, chain)
 
@@ -462,20 +542,29 @@ def cmd_create(cfg: Config, note_type: str, title: str, tag_path: str, open_file
     if dry_run:
         for action in actions:
             print(f"[dry-run] {action.describe()}")
-        print(f"[dry-run] create {note_type} note '{title}' tags=[{', '.join(leaf_tags)}]"
-              + (", open in UI" if open_file else ""))
+        print(
+            f"[dry-run] create {note_type} note '{title}' tags=[{', '.join(leaf_tags)}]"
+            + (", open in UI" if open_file else "")
+        )
         return 0
 
     if not ObsidianCli(cfg).app_running():
-        print("note: Obsidian not open; index-notes blocks render when the app next opens", file=sys.stderr)
+        print(
+            "note: Obsidian not open; index-notes blocks render when the app next opens",
+            file=sys.stderr,
+        )
 
     cli = ObsidianCli(cfg)
     _execute(cfg, cli, actions, dry_run=False)
     rel = f"{cfg.root}/{title}"
-    cli.create_from_template(TEMPLATES.get(note_type, TEMPLATES["atomic"]), rel, open_file)
+    cli.create_from_template(
+        TEMPLATES.get(note_type, TEMPLATES["atomic"]), rel, open_file
+    )
     cli.set_tags(rel, leaf_tags)
-    print(f"  create {note_type} note '{title}' tags=[{', '.join(leaf_tags)}]"
-          + (", open in UI" if open_file else ""))
+    print(
+        f"  create {note_type} note '{title}' tags=[{', '.join(leaf_tags)}]"
+        + (", open in UI" if open_file else "")
+    )
 
     save_store(cfg, scan_vault(cfg), encrypt)
     return 0
@@ -493,6 +582,7 @@ def cmd_ensure(cfg: Config, tag_path: str, dry_run: bool, encrypt: bool) -> int:
 # --------------------------------------------------------------------------
 # CLI
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="obsidian_vault",
@@ -508,22 +598,44 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="show config and store state")
 
-    create = sub.add_parser("create", help="bootstrap a new note (infer index chain first)")
+    create = sub.add_parser(
+        "create", help="bootstrap a new note (infer index chain first)"
+    )
     create.add_argument("note_type", choices=sorted(TEMPLATES))
-    create.add_argument("title", help="human title / filename (e.g. 'Generating an EdDSA SSH Key')")
-    create.add_argument("--tag", dest="tag_path", required=True,
-                        help="leaf topic tag path (e.g. Technology/Systems/Security/GPG-Keys)")
-    create.add_argument("--tags", dest="extra_tags", nargs="*", default=[], help="extra leaf tags")
-    create.add_argument("--open", dest="open_file", action="store_true",
-                        help="open the created note in the UI")
-    create.add_argument("--no-open", dest="open_file", action="store_false",
-                        help="do not open the created note (default)")
+    create.add_argument(
+        "title", help="human title / filename (e.g. 'Generating an EdDSA SSH Key')"
+    )
+    create.add_argument(
+        "--tag",
+        dest="tag_path",
+        required=True,
+        help="leaf topic tag path (e.g. Technology/Systems/Security/GPG-Keys)",
+    )
+    create.add_argument(
+        "--tags", dest="extra_tags", nargs="*", default=[], help="extra leaf tags"
+    )
+    create.add_argument(
+        "--open",
+        dest="open_file",
+        action="store_true",
+        help="open the created note in the UI",
+    )
+    create.add_argument(
+        "--no-open",
+        dest="open_file",
+        action="store_false",
+        help="do not open the created note (default)",
+    )
     create.set_defaults(open_file=False)
-    create.add_argument("--no-chain", action="store_true", help="skip ancestor index notes")
+    create.add_argument(
+        "--no-chain", action="store_true", help="skip ancestor index notes"
+    )
     create.add_argument("--dry-run", action="store_true", help="print the plan only")
     create.add_argument("--no-encrypt", action="store_true")
 
-    ensure = sub.add_parser("ensure-topic", help="create only the missing index chain for a topic")
+    ensure = sub.add_parser(
+        "ensure-topic", help="create only the missing index chain for a topic"
+    )
     ensure.add_argument("tag_path")
     ensure.add_argument("--dry-run", action="store_true")
     ensure.add_argument("--no-encrypt", action="store_true")

@@ -288,7 +288,9 @@ def cmd_run(args):
             second_d = scored[1][1] if len(scored) > 1 else 999  # runner-up gap
             if args.debug:
                 top = ", ".join(f"{n}={d}" for n, d in scored[:3])
-                print(f"[{time.strftime('%H:%M:%S')}] avg={bright:5.1f} {top}", flush=True)
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] avg={bright:5.1f} {top}", flush=True
+                )
 
             if (
                 best_d <= HASH_MAX
