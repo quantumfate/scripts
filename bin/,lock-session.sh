@@ -5,13 +5,13 @@ set -euo pipefail
 CONFIG_DIR="$HOME/.config/hypr"
 
 case "$(hostname)" in
-  quantum-laptop)
+quantum-laptop)
     CONFIG="$CONFIG_DIR/hyprlock-laptop.conf"
     ;;
-  quantum-desktop)
+quantum-desktop)
     CONFIG="$CONFIG_DIR/hyprlock.conf"
     ;;
-  *)
+*)
     echo "lock-session: unknown hostname '$(hostname)'" >&2
     exit 1
     ;;

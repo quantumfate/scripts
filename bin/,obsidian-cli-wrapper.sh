@@ -20,11 +20,11 @@ set -euo pipefail
 BIN="$(dirname "$(readlink -f "$0")")"
 
 case "${1:-status}" in
-    help | -h | --help)
-        sed -n '1,16p' "$0"
-        exec python3 "$BIN/obsidian_vault.py" --help
-        ;;
-    *)
-        exec python3 "$BIN/obsidian_vault.py" "$@"
-        ;;
+help | -h | --help)
+    sed -n '1,16p' "$0"
+    exec python3 "$BIN/obsidian_vault.py" --help
+    ;;
+*)
+    exec python3 "$BIN/obsidian_vault.py" "$@"
+    ;;
 esac

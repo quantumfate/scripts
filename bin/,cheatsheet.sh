@@ -11,7 +11,7 @@ submap="$(hyprctl submap)"
 [[ "$submap" == "default" ]] && submap=""
 
 rows() {
-  hyprctl binds -j | jq -r --arg cur "$submap" '
+    hyprctl binds -j | jq -r --arg cur "$submap" '
     # modmask -> "SUPER+CTRL+..." (bit flags)
     def mods($m):
       [ {"1":"SHIFT","4":"CTRL","8":"ALT","64":"SUPER"}
@@ -31,9 +31,9 @@ formatted="$(rows | column -t -s$'\t')"
 prompt="binds${submap:+ · $submap}"
 
 if command -v rofi >/dev/null 2>&1; then
-  printf '%s\n' "$formatted" | rofi -dmenu -i -p "$prompt" -no-custom -theme-str 'window {width: 50%;}'
+    printf '%s\n' "$formatted" | rofi -dmenu -i -p "$prompt" -no-custom -theme-str 'window {width: 50%;}'
 elif command -v wofi >/dev/null 2>&1; then
-  printf '%s\n' "$formatted" | wofi --dmenu -p "$prompt"
+    printf '%s\n' "$formatted" | wofi --dmenu -p "$prompt"
 else
-  printf '%s\n' "$formatted"
+    printf '%s\n' "$formatted"
 fi

@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 # Environment variables
 export __GL_SHADER_DISK_CACHE="1"
 export __GL_SHADER_DISK_CACHE_PATH="/home/quantum/Games/ankama-launcher"
