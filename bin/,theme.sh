@@ -224,14 +224,18 @@ apply_zathura() {
     echo "zathura: catppuccin-$palette"
 }
 
-# rofi picks a theme by name, and carries its own icon-theme line.
+# rofi's `@theme` in config.rasi names the USER'S own theme (custom.rasi), which
+# then @imports a palette. Rewriting @theme threw that away along with every
+# override in it — the launcher came back as stock Catppuccin and, on a light
+# palette, cream. The palette seam is the @import line inside custom.rasi.
 apply_rofi() {
     local palette=$1 conf="$CONFIG/rofi/config.rasi" icons
+    local custom="$HOME/.local/share/rofi/themes/custom.rasi"
     [ -f "$conf" ] || return 0
     is_light "$palette" && icons="Papirus-Light" || icons="Papirus-Dark"
     sed -i "s|^\( *icon-theme: *\).*|\1\"$icons\";|" "$conf"
-    if [ -f "$HOME/.local/share/rofi/themes/catppuccin-$palette.rasi" ]; then
-        sed -i "s|^@theme .*|@theme \"catppuccin-$palette\"|" "$conf"
+    if [ -f "$custom" ] && [ -f "$HOME/.local/share/rofi/themes/catppuccin-$palette.rasi" ]; then
+        sed -i "s|^@import .*|@import \"catppuccin-$palette\"|" "$custom"
     fi
     echo "rofi: catppuccin-$palette ($icons)"
 }
