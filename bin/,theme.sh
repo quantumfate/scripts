@@ -16,6 +16,7 @@
 #   ,theme.sh auto             hand the choice back to the sun and apply
 #   ,theme.sh toggle           swap between the day and night palettes
 #   ,theme.sh get              print the resolved palette
+#   ,theme.sh wallpaper F [P]  bind a wallpaper to a palette (default: current)
 #   ,theme.sh status           print what each surface is currently set to
 #
 # Writes go through the same store the shell uses, so setting a palette here and
@@ -353,10 +354,13 @@ process_wallpaper() {
 
 apply_wallpaper() {
     local palette=$1 wall
-    wall=$(get wallpaper "")
+    # A wallpaper belongs to a palette, not to the desk: the image that reads
+    # well behind Latte is rarely the one that reads well behind Mocha. The
+    # store keeps a map; `wallpaper` is only the fallback for a palette that has
+    # not been given one.
+    wall=$(jq -r --arg p "$palette" '.wallpapers[$p] // ""' "$STATE" 2>/dev/null || echo "")
+    [ -n "$wall" ] || wall=$(get wallpaper "")
     if [ -z "$wall" ]; then
-        # "" means the palette decides. A per-palette file if one exists, the
-        # shared default otherwise.
         local dir="$CONFIG/hypr/wallpapers"
         for candidate in "$dir/$palette.jpg" "$dir/$palette.png"; do
             [ -f "$candidate" ] && {
@@ -438,6 +442,18 @@ cmd_toggle() {
     if [ "$current" = "$day" ]; then cmd_set "$night"; else cmd_set "$day"; fi
 }
 
+# Bind a wallpaper to a palette: `,theme.sh wallpaper <file> [palette]`.
+cmd_wallpaper() {
+    local file=${1-} palette=${2-}
+    [ -n "$file" ] || die "wallpaper needs a file"
+    [ -f "$file" ] || die "no such file: $file"
+    [ -n "$palette" ] || palette=$(resolve)
+    is_palette "$palette" || die "unknown palette '$palette'"
+    put "$(jq -n --arg p "$palette" --arg f "$file" '{wallpapers: {($p): $f}}')"
+    echo "wallpaper: $palette -> ${file##*/}"
+    cmd_apply
+}
+
 cmd_status() {
     printf 'store     %s\n' "$STATE"
     printf 'mode      %s\n' "$(get mode auto)"
@@ -456,6 +472,10 @@ set)
     ;;
 auto) cmd_auto ;;
 toggle) cmd_toggle ;;
+wallpaper)
+    shift
+    cmd_wallpaper "${1-}" "${2-}"
+    ;;
 get)
     resolve
     echo
