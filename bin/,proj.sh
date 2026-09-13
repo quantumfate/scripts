@@ -47,6 +47,16 @@
 #   ,proj.sh kill                 kill the focused project (its sessions; the
 #                                 server goes with it if it held nothing else)
 #   ,proj.sh kill-all             kill every project server
+#   ,proj.sh drift                 compare projects.json's project names
+#                                 against this scan (see "projects.json" below)
+#
+# projects.json ($XDG_STATE_HOME/projects.json, schema in the quickshell repo)
+# holds dashboard metadata this scan has no room for — kind, tmux window
+# template for display, `study`, priority — keyed by project name. It does NOT
+# carry a path: this scan is the only thing allowed to say where a project
+# lives, on pain of the exact failure mode this header already warns about.
+# `drift` is the check for the other half — a name in projects.json that this
+# scan no longer produces (renamed, removed, typo'd).
 #
 # Per-project config — `.proj.toml` in the repo root, or a `[projects.<name>]`
 # table in the tms config (the repo file wins):
@@ -65,6 +75,7 @@
 set -euo pipefail
 
 TMS_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/tms/config.toml"
+PROJECTS_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/projects.json"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/proj-list"
 CACHE_TTL=300
 TEMPLATE_WINDOWS=(nvim zsh run)
@@ -1033,6 +1044,35 @@ kill_all() {
     done
 }
 
+# The other half of "not a second source of truth": projects.json carries
+# metadata this scan cannot, keyed by a name it must still recognise. A name
+# that survives here after the project is gone from the scan is stale
+# metadata nobody will notice until the dashboard shows a repo that no longer
+# exists.
+drift() {
+    [[ -f $PROJECTS_JSON ]] || {
+        echo "no projects.json at $PROJECTS_JSON (nothing to check)"
+        return 0
+    }
+    command -v jq >/dev/null 2>&1 || die "drift: jq is required"
+    local -a known=() stale=()
+    mapfile -t known < <(jq -r '.projects | keys[]' "$PROJECTS_JSON")
+    local name
+    for name in "${known[@]}"; do
+        if [[ -z $(lookup 1 "$name" 1) ]]; then
+            stale+=("$name")
+        fi
+    done
+    if ((${#stale[@]} == 0)); then
+        echo "projects.json: no drift (${#known[@]} project(s) checked)"
+        return 0
+    fi
+    printf 'projects.json: %d stale entr%s not in the current scan:\n' \
+        "${#stale[@]}" "$([[ ${#stale[@]} == 1 ]] && echo y || echo ies)"
+    printf '  %s\n' "${stale[@]}"
+    return 1
+}
+
 # Flags are accepted on either side of the subcommand, so `open -n <path>`
 # reads the way the usage above spells it.
 FLAGS_EATEN=0
@@ -1056,6 +1096,7 @@ shift "$FLAGS_EATEN"
 case "${1-pick}" in
 list) list "${2-}" ;;
 running) running ;;
+drift) drift ;;
 pick)
     shift
     parse_flags "$@"

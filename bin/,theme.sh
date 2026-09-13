@@ -210,10 +210,10 @@ apply_hyprland() {
     hyprctl keyword general:col.inactive_border "rgb(${accent#\#})88" >/dev/null
     echo "hyprland: border $accent"
 
-    apply_opacity
+    apply_transparency
 }
 
-# The window-opacity dial lives in the theme store, but Hyprland builds its
+# The window-transparency dial lives in the theme store, but Hyprland builds its
 # opacity window rules once, when the config loads: HL.WindowRule exposes only
 # set_enabled, so a rule's value cannot be changed after the fact. Re-reading
 # the store therefore means re-reading the config.
@@ -221,21 +221,21 @@ apply_hyprland() {
 # `hyprctl reload` is the only lever, and it is too blunt to run on every apply
 # — the sun timer fires hourly and a reload is visible. So it runs only when the
 # dial actually moved, tracked by a stamp beside the wallpaper cache.
-apply_opacity() {
+apply_transparency() {
     local dial stamp previous
-    dial=$(get opacity 1.0)
-    stamp="${XDG_CACHE_HOME:-$HOME/.cache}/quantumfate/opacity.applied"
+    dial=$(get transparency 1.0)
+    stamp="${XDG_CACHE_HOME:-$HOME/.cache}/quantumfate/transparency.applied"
     previous=$([ -f "$stamp" ] && cat "$stamp" || echo "")
 
     if [ "$dial" = "$previous" ]; then
-        echo "opacity: $dial (unchanged)"
+        echo "transparency: $dial (unchanged)"
         return
     fi
 
     mkdir -p "$(dirname "$stamp")"
     printf '%s' "$dial" >"$stamp"
     hyprctl reload >/dev/null 2>&1 || true
-    echo "opacity: $dial (reloaded)"
+    echo "transparency: $dial (reloaded)"
 }
 
 # A transparent bar over a high-contrast source image is unreadable, and the
