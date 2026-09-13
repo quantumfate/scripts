@@ -25,6 +25,7 @@
 set -euo pipefail
 
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/theme.json"
+RESULT="${XDG_STATE_HOME:-$HOME/.local/state}/theme.result.json"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wallpapers"
 
@@ -64,6 +65,47 @@ put() {
     tmp=$(mktemp "$STATE.XXXXXX")
     jq --argjson p "$patch" '. * $p' "$STATE" >"$tmp"
     mv -f "$tmp" "$STATE"
+}
+
+# --- the result --------------------------------------------------------------
+#
+# The adapter-result contract (schemas/adapter-result.schema.json): appliers
+# below call these as they go, so the summary reflects what each one actually
+# did rather than a second pass re-guessing it from the human output.
+RESULT_APPLIED=()
+RESULT_PENDING=()
+RESULT_FAILED=()
+
+record_applied() { RESULT_APPLIED+=("$(jq -n --arg s "$1" --arg t "$2" '{surface: $s, tier: $t}')"); }
+record_pending() { RESULT_PENDING+=("$(jq -n --arg s "$1" --arg t "$2" --arg r "$3" '{surface: $s, tier: $t, reason: $r}')"); }
+record_failed() { RESULT_FAILED+=("$(jq -n --arg s "$1" --arg r "$2" '{surface: $s, reason: $r}')"); }
+
+# jq -s over one-per-line input, so an empty bash array still yields `[]`
+# rather than jq choking on zero arguments.
+json_array() {
+    local -n arr=$1
+    [ ${#arr[@]} -eq 0 ] && {
+        printf '[]'
+        return
+    }
+    printf '%s\n' "${arr[@]}" | jq -s .
+}
+
+# Written once per `apply`, atomically for the same reason theme.json is: a
+# reader (AdapterResult.qml) may be watching this file mid-write.
+write_result() {
+    local ok=true tmp
+    [ ${#RESULT_FAILED[@]} -eq 0 ] || ok=false
+    tmp=$(mktemp "$RESULT.XXXXXX")
+    jq -n \
+        --argjson ok "$ok" \
+        --argjson ts "$(date +%s)" \
+        --arg adapter theme \
+        --argjson applied "$(json_array RESULT_APPLIED)" \
+        --argjson pending "$(json_array RESULT_PENDING)" \
+        --argjson failed "$(json_array RESULT_FAILED)" \
+        '{ok: $ok, ts: $ts, adapter: $adapter, applied: $applied, pending: $pending, failed: $failed}' >"$tmp"
+    mv -f "$tmp" "$RESULT"
 }
 
 is_palette() {
@@ -134,6 +176,7 @@ apply_kitty() {
     local palette=$1 conf="$CONFIG/kitty/current-theme.conf"
     [ -f "$CONFIG/kitty/themes/$palette.conf" ] || {
         echo "kitty: no theme for $palette"
+        record_failed kitty "no theme for $palette"
         return
     }
     # Remote control is deliberately off in kitty.conf, so this is a file swap
@@ -142,6 +185,7 @@ apply_kitty() {
     ln -sfn "themes/$palette.conf" "$conf"
     sandboxed || pkill -USR1 -x kitty 2>/dev/null || true
     echo "kitty: $palette"
+    record_applied kitty immediate
 }
 
 apply_gtk() {
@@ -149,6 +193,7 @@ apply_gtk() {
     theme="catppuccin-$palette-$ACCENT-standard+default"
     if [ ! -d "/usr/share/themes/$theme" ] && [ ! -d "$HOME/.themes/$theme" ]; then
         echo "gtk: $theme not installed (see the theming role)"
+        record_failed gtk "$theme not installed"
         return
     fi
     is_light "$palette" && scheme="prefer-light" || scheme="prefer-dark"
@@ -169,6 +214,7 @@ apply_gtk() {
     mkdir -p "$CONFIG/gtk-4.0"
     ln -sfn "/usr/share/themes/$theme/gtk-4.0/gtk.css" "$CONFIG/gtk-4.0/gtk.css" 2>/dev/null || true
     echo "gtk: $theme ($scheme, $icons)"
+    record_applied gtk immediate
 }
 
 apply_qt() {
@@ -200,6 +246,11 @@ apply_qt() {
     # HUP the change waits for the next launch.
     sandboxed || pkill -HUP -x xsettingsd 2>/dev/null || true
     echo "qt: $colors [${applied[*]:-none}]"
+    if [ ${#applied[@]} -eq 0 ]; then
+        record_failed qt "no colour scheme $colors installed"
+    else
+        record_applied qt immediate
+    fi
 }
 
 # Everything below was installed in all four flavours and switched in none of
@@ -213,6 +264,7 @@ apply_btop() {
     [ -f "$CONFIG/btop/themes/catppuccin_$palette.theme" ] || return 0
     sed -i "s|^color_theme = .*|color_theme = \"catppuccin_$palette.theme\"|" "$conf"
     echo "btop: catppuccin_$palette"
+    record_applied btop immediate
 }
 
 # zathura includes a file by bare name.
@@ -222,6 +274,7 @@ apply_zathura() {
     [ -f "$CONFIG/zathura/catppuccin-$palette" ] || return 0
     sed -i "s|^include catppuccin-.*|include catppuccin-$palette|" "$conf"
     echo "zathura: catppuccin-$palette"
+    record_applied zathura immediate
 }
 
 # rofi's `@theme` in config.rasi names the USER'S own theme (custom.rasi), which
@@ -238,6 +291,7 @@ apply_rofi() {
         sed -i "s|^@import .*|@import \"catppuccin-$palette\"|" "$custom"
     fi
     echo "rofi: catppuccin-$palette ($icons)"
+    record_applied rofi immediate
 }
 
 # wlogout hardcodes the flavour inside every icon path.
@@ -247,6 +301,7 @@ apply_wlogout() {
     [ -d "$CONFIG/wlogout/catppuccin/icons/wlogout/$palette" ] || return 0
     sed -i -E "s#(/wlogout/catppuccin/icons/wlogout/)[a-z]+/#\\1$palette/#g" "$css"
     echo "wlogout: $palette"
+    record_applied wlogout immediate
 }
 
 # Zen reads user.js once at launch, so this lands on the next restart. The
@@ -261,6 +316,39 @@ apply_zen() {
     sed -i "s|^user_pref(\"layout.css.prefers-color-scheme.content-override\".*|user_pref(\"layout.css.prefers-color-scheme.content-override\", 3); // follow system|" "$js"
     sed -i "s|^user_pref(\"theme-better_find_bar-enable_custom_background\".*|user_pref(\"theme-better_find_bar-enable_custom_background\", false);|" "$js"
     echo "zen: $accent (applies on next launch)"
+    record_pending zen next-launch "user.js is read once at launch"
+}
+
+# The cursor is the one thing that used to need a re-login.
+#
+# XCURSOR_THEME lived in ~/.config/environment.d, which systemd --user reads at
+# login and never again — so a palette switch could not move it. Three writes
+# replace that, covering three different audiences:
+#
+#   hyprctl setcursor          the compositor, and every surface it draws now
+#   systemctl --user set-env   apps launched AFTER this point, since uwsm app
+#                              scopes inherit the user manager's environment
+#   the seed in environment.d  a fresh login, before any apply has run
+#
+# Miss the middle one and a browser opened after a switch still gets the old
+# cursor; miss the last and a fresh login has no cursor theme at all.
+apply_cursor() {
+    local palette=$1 theme size
+    theme="catppuccin-$palette-$ACCENT-cursors"
+    size=$(get cursor_size 28)
+    if [ ! -d "/usr/share/icons/$theme" ] && [ ! -d "$HOME/.icons/$theme" ] && [ ! -d "$HOME/.local/share/icons/$theme" ]; then
+        echo "cursor: $theme not installed"
+        record_failed cursor "$theme not installed"
+        return 0
+    fi
+    sandboxed && {
+        echo "cursor: skipped (sandboxed)"
+        return 0
+    }
+    systemctl --user set-environment "XCURSOR_THEME=$theme" "XCURSOR_SIZE=$size" 2>/dev/null || true
+    have hyprctl && hyprctl setcursor "$theme" "$size" >/dev/null 2>&1 || true
+    echo "cursor: $theme ($size)"
+    record_applied cursor immediate
 }
 
 apply_hyprland() {
@@ -271,6 +359,7 @@ apply_hyprland() {
     }
     have hyprctl || {
         echo "hyprland: not running"
+        record_failed hyprland "not running"
         return
     }
     # Hyprland's colours come from its own config (hypr/themes/colors.lua reads
@@ -286,6 +375,7 @@ apply_hyprland() {
     hyprctl dispatch 'hl.dsp.submap("reset")' >/dev/null 2>&1 || true
     hyprctl reload >/dev/null 2>&1 || true
     echo "hyprland: reloaded for $palette"
+    record_applied hyprland immediate
 
     apply_transparency
 }
@@ -313,6 +403,7 @@ apply_transparency() {
     printf '%s' "$dial" >"$stamp"
     hyprctl reload >/dev/null 2>&1 || true
     echo "transparency: $dial (reloaded)"
+    record_applied transparency immediate
 }
 
 # A transparent bar over a high-contrast source image is unreadable, and the
@@ -375,6 +466,7 @@ apply_wallpaper() {
     fi
     [ -n "$wall" ] && [ -f "$wall" ] || {
         echo "wallpaper: unchanged"
+        record_failed wallpaper "no wallpaper bound to $palette and no default found"
         return
     }
     wall=$(process_wallpaper "$palette" "$wall")
@@ -388,6 +480,7 @@ apply_wallpaper() {
     }
     hyprctl hyprpaper reload ,"$wall" >/dev/null 2>&1 || true
     echo "wallpaper: ${wall##*/}"
+    record_applied wallpaper immediate
 }
 
 # The accent colour per flavour, matching Theme.qml's tables. Duplicated here
@@ -416,12 +509,18 @@ cmd_apply() {
     apply_gtk "$palette"
     apply_qt "$palette"
     apply_hyprland "$palette"
+    apply_cursor "$palette"
     apply_btop "$palette"
     apply_zathura "$palette"
     apply_rofi "$palette"
     apply_wlogout "$palette"
     apply_zen "$palette"
     apply_wallpaper "$palette"
+
+    # Last, so it reflects every applier above it. A sandboxed run records
+    # nothing real, so it writes nothing — a test must not leave a result file
+    # claiming the desk changed.
+    sandboxed || write_result
 }
 
 cmd_set() {
