@@ -466,19 +466,15 @@ process_wallpaper() {
     fi
 }
 
-apply_wallpaper() {
+# Which wallpaper this palette should show: mood binding, then palette binding,
+# then the single fallback, then <palette>.jpg. Shared with `status` so the two
+# can never disagree about what is bound.
+resolve_wallpaper() {
     local palette=$1 mood wall
-    # Mood is the stronger signal — a wallpaper bound to "deep work" should win
-    # over one merely bound to the current palette — so it is looked up first
-    # and only falls through to the palette map when nothing is bound for it.
     mood=$(get mood "")
     if [ -n "$mood" ]; then
         wall=$(jq -r --arg m "$mood" '.moods[$m] // ""' "$STATE" 2>/dev/null || echo "")
     fi
-    # A wallpaper belongs to a palette, not to the desk: the image that reads
-    # well behind Latte is rarely the one that reads well behind Mocha. The
-    # store keeps a map; `wallpaper` is only the fallback for a palette that has
-    # not been given one.
     [ -n "${wall:-}" ] || wall=$(jq -r --arg p "$palette" '.wallpapers[$p] // ""' "$STATE" 2>/dev/null || echo "")
     [ -n "$wall" ] || wall=$(get wallpaper "")
     if [ -z "$wall" ]; then
@@ -490,6 +486,12 @@ apply_wallpaper() {
             }
         done
     fi
+    printf '%s' "$wall"
+}
+
+apply_wallpaper() {
+    local palette=$1 wall
+    wall=$(resolve_wallpaper "$palette")
     [ -n "$wall" ] && [ -f "$wall" ] || {
         echo "wallpaper: unchanged"
         record_failed wallpaper "no wallpaper bound to mood or palette and no default found"
@@ -623,6 +625,12 @@ cmd_status() {
     have gsettings && printf 'gtk       %s\n' "$(gsettings get org.gnome.desktop.interface gtk-theme)"
     printf 'qt6ct     %s\n' "$(sed -n 's/^color_scheme_path=.*\///p' "$CONFIG/qt6ct/qt6ct.conf" 2>/dev/null || echo unset)"
     printf 'kvantum   %s\n' "$(sed -n 's/^theme=//p' "$CONFIG/Kvantum/kvantum.kvconfig" 2>/dev/null || echo unset)"
+    # Which wallpaper is bound, resolved the same way apply_wallpaper resolves
+    # it — so `status` and an apply can never disagree about what is showing.
+    local mood
+    mood=$(get mood "")
+    printf 'mood      %s\n' "${mood:-none}"
+    printf 'wallpaper %s\n' "$(resolve_wallpaper "$(resolve)")"
 }
 
 case "${1-apply}" in
