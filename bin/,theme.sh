@@ -155,10 +155,19 @@ apply_gtk() {
         "$GSETTINGS" set org.gnome.desktop.interface gtk-theme "$theme"
         "$GSETTINGS" set org.gnome.desktop.interface color-scheme "$scheme"
     fi
+    # Icons are a separate setting from the theme, and were never switched at
+    # all: a light palette kept Papirus-Dark, which is why the tray and menus
+    # stayed dark against light chrome.
+    local icons
+    is_light "$palette" && icons="Papirus-Light" || icons="Papirus-Dark"
+    if have "$GSETTINGS"; then
+        "$GSETTINGS" set org.gnome.desktop.interface icon-theme "$icons"
+    fi
+
     # GTK4 ignores the theme name and reads this instead.
     mkdir -p "$CONFIG/gtk-4.0"
     ln -sfn "/usr/share/themes/$theme/gtk-4.0/gtk.css" "$CONFIG/gtk-4.0/gtk.css" 2>/dev/null || true
-    echo "gtk: $theme ($scheme)"
+    echo "gtk: $theme ($scheme, $icons)"
 }
 
 apply_qt() {
@@ -192,6 +201,63 @@ apply_qt() {
     echo "qt: $colors [${applied[*]:-none}]"
 }
 
+# Everything below was installed in all four flavours and switched in none of
+# them: the assets were there, the selector line was not. Each is one line in a
+# config file, and each was a surface that stayed Macchiato while the desk moved.
+
+# btop names its theme file outright.
+apply_btop() {
+    local palette=$1 conf="$CONFIG/btop/btop.conf"
+    [ -f "$conf" ] || return 0
+    [ -f "$CONFIG/btop/themes/catppuccin_$palette.theme" ] || return 0
+    sed -i "s|^color_theme = .*|color_theme = \"catppuccin_$palette.theme\"|" "$conf"
+    echo "btop: catppuccin_$palette"
+}
+
+# zathura includes a file by bare name.
+apply_zathura() {
+    local palette=$1 conf="$CONFIG/zathura/zathurarc"
+    [ -f "$conf" ] || return 0
+    [ -f "$CONFIG/zathura/catppuccin-$palette" ] || return 0
+    sed -i "s|^include catppuccin-.*|include catppuccin-$palette|" "$conf"
+    echo "zathura: catppuccin-$palette"
+}
+
+# rofi picks a theme by name, and carries its own icon-theme line.
+apply_rofi() {
+    local palette=$1 conf="$CONFIG/rofi/config.rasi" icons
+    [ -f "$conf" ] || return 0
+    is_light "$palette" && icons="Papirus-Light" || icons="Papirus-Dark"
+    sed -i "s|^\( *icon-theme: *\).*|\1\"$icons\";|" "$conf"
+    if [ -f "$HOME/.local/share/rofi/themes/catppuccin-$palette.rasi" ]; then
+        sed -i "s|^@theme .*|@theme \"catppuccin-$palette\"|" "$conf"
+    fi
+    echo "rofi: catppuccin-$palette ($icons)"
+}
+
+# wlogout hardcodes the flavour inside every icon path.
+apply_wlogout() {
+    local palette=$1 css="$CONFIG/wlogout/style.css"
+    [ -f "$css" ] || return 0
+    [ -d "$CONFIG/wlogout/catppuccin/icons/wlogout/$palette" ] || return 0
+    sed -i -E "s#(/wlogout/catppuccin/icons/wlogout/)[a-z]+/#\\1$palette/#g" "$css"
+    echo "wlogout: $palette"
+}
+
+# Zen reads user.js once at launch, so this lands on the next restart. The
+# accent is the only per-palette value; content-override follows the system so
+# chrome and page content cannot disagree, which is what made a light palette
+# look broken rather than light.
+apply_zen() {
+    local palette=$1 js="$CONFIG/zen-chezmoi/user.js" accent
+    [ -f "$js" ] || return 0
+    accent=$(accent_hex "$palette")
+    sed -i "s|^user_pref(\"zen.theme.accent-color\".*|user_pref(\"zen.theme.accent-color\", \"$accent\");|" "$js"
+    sed -i "s|^user_pref(\"layout.css.prefers-color-scheme.content-override\".*|user_pref(\"layout.css.prefers-color-scheme.content-override\", 3); // follow system|" "$js"
+    sed -i "s|^user_pref(\"theme-better_find_bar-enable_custom_background\".*|user_pref(\"theme-better_find_bar-enable_custom_background\", false);|" "$js"
+    echo "zen: $accent (applies on next launch)"
+}
+
 apply_hyprland() {
     local palette=$1
     sandboxed && {
@@ -206,6 +272,13 @@ apply_hyprland() {
     # this same store), because `hyprctl keyword general:col.*` answers "unknown
     # request" on a Lua-configured Hyprland — and exits 0, so a script cannot
     # even tell it failed. Reloading re-runs that file against the new palette.
+    #
+    # Leave any submap FIRST. A reload re-executes the Lua config, which resets
+    # the submap stack in hypr/lib/submap.lua while Hyprland is still runtime-in
+    # a submap — so escape pops an empty stack and the keyboard is stuck in a
+    # menu with no way out. Cycling the theme from the shell submap did exactly
+    # that. hyprctl's dispatch argument is evaluated as Lua on this config.
+    hyprctl dispatch 'hl.dsp.submap("reset")' >/dev/null 2>&1 || true
     hyprctl reload >/dev/null 2>&1 || true
     echo "hyprland: reloaded for $palette"
 
@@ -335,6 +408,11 @@ cmd_apply() {
     apply_gtk "$palette"
     apply_qt "$palette"
     apply_hyprland "$palette"
+    apply_btop "$palette"
+    apply_zathura "$palette"
+    apply_rofi "$palette"
+    apply_wlogout "$palette"
+    apply_zen "$palette"
     apply_wallpaper "$palette"
 }
 

@@ -120,6 +120,38 @@ previous_fingerprint() { # $1 = name
     jq -r --arg n "$1" '.projects[$n]._fingerprint // ""' "$OUT" 2>/dev/null || echo ""
 }
 
+# Which projects the dashboard is about.
+#
+# `,proj.sh list` knows every project tms can open, which is not the same
+# question: it includes an Obsidian vault, a home directory, a config dir and
+# every nvim plugin checkout. A dashboard listing those is noise around the few
+# repositories that actually hold the desk together.
+#
+# projects.json is that shorter list. It carries no paths on purpose — tms stays
+# the one place that knows where a project lives — so this intersects the two:
+# names from the store, paths from tms. With no store, everything tms knows is
+# still better than nothing.
+tracked_projects() {
+    local store="${XDG_STATE_HOME:-$HOME/.local/state}/projects.json"
+    if [ ! -f "$store" ]; then
+        "$PROJ_SH" list
+        return 0
+    fi
+    local wanted
+    wanted=$(jq -r '.projects | keys[]' "$store" 2>/dev/null) || {
+        "$PROJ_SH" list
+        return 0
+    }
+    [ -n "$wanted" ] || {
+        "$PROJ_SH" list
+        return 0
+    }
+    "$PROJ_SH" list | awk -v want="$wanted" '
+        BEGIN { n = split(want, a, "\n"); for (i = 1; i <= n; i++) keep[a[i]] = 1 }
+        keep[$1]
+    '
+}
+
 main() {
     # Not `local`: the EXIT trap fires after main() has already returned (or
     # unwound via `set -e`), by which point a local `tmp` is out of scope and
@@ -144,7 +176,7 @@ main() {
         entry=$(collect_one "$path")
         entry=$(jq --arg fp "$fp" '. + {_fingerprint: $fp}' <<<"$entry")
         entries+=("$(jq -n --arg n "$name" --argjson e "$entry" '{($n): $e}')")
-    done < <("$PROJ_SH" list)
+    done < <(tracked_projects)
 
     local merged="{}"
     for entry in "${entries[@]}"; do
