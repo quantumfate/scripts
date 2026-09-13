@@ -25,6 +25,7 @@ set -euo pipefail
 
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/theme.json"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wallpapers"
 
 # The accent is not yet a store field: every surface below takes flavour+accent
 # as one theme name, and only one accent is installed per flavour that matters.
@@ -117,6 +118,11 @@ daytime() {
 # on what it was told; nothing else should ever override it.
 GSETTINGS=${THEME_GSETTINGS:-gsettings}
 
+# Same injection point, for the same reason: tests need to force the
+# "ImageMagick missing" path deterministically rather than hoping the machine
+# running them lacks it.
+MAGICK=${THEME_MAGICK:-magick}
+
 # The same hazard, three more times: hyprctl, pkill and hyprpaper all address the
 # live session by name and ignore $XDG_CONFIG_HOME entirely. Setting
 # THEME_GSETTINGS at all means "this is a test run" and holds every one of them
@@ -203,6 +209,74 @@ apply_hyprland() {
     hyprctl keyword general:col.active_border "rgb(${accent#\#})" >/dev/null
     hyprctl keyword general:col.inactive_border "rgb(${accent#\#})88" >/dev/null
     echo "hyprland: border $accent"
+
+    apply_opacity
+}
+
+# The window-opacity dial lives in the theme store, but Hyprland builds its
+# opacity window rules once, when the config loads: HL.WindowRule exposes only
+# set_enabled, so a rule's value cannot be changed after the fact. Re-reading
+# the store therefore means re-reading the config.
+#
+# `hyprctl reload` is the only lever, and it is too blunt to run on every apply
+# — the sun timer fires hourly and a reload is visible. So it runs only when the
+# dial actually moved, tracked by a stamp beside the wallpaper cache.
+apply_opacity() {
+    local dial stamp previous
+    dial=$(get opacity 1.0)
+    stamp="${XDG_CACHE_HOME:-$HOME/.cache}/quantumfate/opacity.applied"
+    previous=$([ -f "$stamp" ] && cat "$stamp" || echo "")
+
+    if [ "$dial" = "$previous" ]; then
+        echo "opacity: $dial (unchanged)"
+        return
+    fi
+
+    mkdir -p "$(dirname "$stamp")"
+    printf '%s' "$dial" >"$stamp"
+    hyprctl reload >/dev/null 2>&1 || true
+    echo "opacity: $dial (reloaded)"
+}
+
+# A transparent bar over a high-contrast source image is unreadable, and the
+# fix belongs here rather than in a wallpaper-picking rule: blur+desaturate+tint
+# every wallpaper toward its palette's accent once, and hand hyprpaper the
+# result instead of the original.
+#
+# Cached by source mtime rather than content hash — a stat is free and a
+# wallpaper file does not change without its mtime moving. The stamp file next
+# to the render is what makes an unchanged source a no-op on the next apply.
+process_wallpaper() {
+    local palette=$1 wall=$2
+    have "$MAGICK" || {
+        printf '%s' "$wall"
+        return
+    }
+    local name="${wall##*/}"
+    local out_dir="$CACHE/$palette"
+    local cached="$out_dir/$name"
+    local stamp="$cached.mtime"
+    local src_mtime
+    src_mtime=$(stat -c %Y "$wall" 2>/dev/null || echo 0)
+
+    if [ -f "$cached" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$src_mtime" ]; then
+        printf '%s' "$cached"
+        return
+    fi
+
+    mkdir -p "$out_dir"
+    local accent
+    accent=$(accent_hex "$palette")
+    # Blur hides detail a bar would otherwise sit on top of; the modulate call
+    # desaturates without flattening to grey; colorize is the tint toward the
+    # palette's accent that makes the result read as "this palette" at a glance.
+    if "$MAGICK" "$wall" -blur 0x12 -modulate 100,50,100 -fill "$accent" -colorize 25% "$cached" 2>/dev/null; then
+        printf '%s' "$src_mtime" >"$stamp"
+        printf '%s' "$cached"
+    else
+        rm -f "$cached" "$stamp"
+        printf '%s' "$wall"
+    fi
 }
 
 apply_wallpaper() {
@@ -223,6 +297,7 @@ apply_wallpaper() {
         echo "wallpaper: unchanged"
         return
     }
+    wall=$(process_wallpaper "$palette" "$wall")
     sandboxed && {
         echo "wallpaper: skipped (sandboxed)"
         return

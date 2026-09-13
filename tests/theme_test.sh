@@ -50,7 +50,7 @@ contains() {
 # A scratch desktop: the files the script edits, with the shapes it expects.
 setup() {
     ROOT=$(mktemp -d)
-    export XDG_CONFIG_HOME="$ROOT/config" XDG_STATE_HOME="$ROOT/state"
+    export XDG_CONFIG_HOME="$ROOT/config" XDG_STATE_HOME="$ROOT/state" XDG_CACHE_HOME="$ROOT/cache"
 
     # The gsettings recorder. Appends its arguments and succeeds, so the script
     # takes the same path it would on a real desktop.
@@ -196,6 +196,57 @@ fi
 check "the surfaces that exist still changed" "frappe" "$(field palette)"
 contains "qt6ct still rewritten" "catppuccin-frappe-mauve.conf" "$(cat "$XDG_CONFIG_HOME/qt6ct/qt6ct.conf")"
 teardown
+
+echo "wallpaper cache: rendered once, kept on an unchanged source"
+setup
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+# A stub magick, so the test asserts on caching behaviour rather than on real
+# image output: it just needs to run once per distinct input to prove whether
+# the script asked it to.
+MAGICK_LOG="$ROOT/magick.log"
+cat >"$ROOT/magick" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$MAGICK_LOG"
+touch "\${@: -1}"
+STUB
+chmod +x "$ROOT/magick"
+export THEME_MAGICK="$ROOT/magick"
+printf 'source-v1' >"$XDG_CONFIG_HOME/hypr/wallpapers/mocha.png"
+
+"$THEME" set mocha >/dev/null
+cached="$XDG_CACHE_HOME/wallpapers/mocha/mocha.png"
+check "a cached render was produced" "1" "$([ -f "$cached" ] && echo 1 || echo 0)"
+check "magick ran once" "1" "$(wc -l <"$MAGICK_LOG" | tr -d ' ')"
+
+"$THEME" apply >/dev/null
+check "an unchanged source is not re-rendered" "1" "$(wc -l <"$MAGICK_LOG" | tr -d ' ')"
+
+touch -d '+1 hour' "$XDG_CONFIG_HOME/hypr/wallpapers/mocha.png"
+"$THEME" apply >/dev/null
+check "a changed source mtime re-renders" "2" "$(wc -l <"$MAGICK_LOG" | tr -d ' ')"
+unset THEME_MAGICK
+teardown
+
+echo "wallpaper cache: missing ImageMagick degrades to the original"
+setup
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+printf 'source' >"$XDG_CONFIG_HOME/hypr/wallpapers/mocha.png"
+export THEME_MAGICK="$ROOT/no-such-magick-binary"
+"$THEME" set mocha >/dev/null
+check "no cache directory was created" "0" "$([ -d "$XDG_CACHE_HOME/wallpapers" ] && echo 1 || echo 0)"
+unset THEME_MAGICK
+teardown
+
+if command -v magick >/dev/null 2>&1; then
+    echo "wallpaper cache: a real render lands under XDG_CACHE_HOME, tinted per palette"
+    setup
+    mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+    magick -size 8x8 xc:'#336699' "$XDG_CONFIG_HOME/hypr/wallpapers/mocha.png"
+    "$THEME" set mocha >/dev/null
+    check "rendered under the scratch cache, not the real one" "1" \
+        "$([ -f "$XDG_CACHE_HOME/wallpapers/mocha/mocha.png" ] && echo 1 || echo 0)"
+    teardown
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
