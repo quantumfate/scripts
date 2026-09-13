@@ -11,13 +11,14 @@
 # executed either way, and a theme you cannot set from a tmux pane at 2am is not
 # finished.
 #
-#   ,theme.sh apply            fan the current theme.json out to everything
-#   ,theme.sh set <palette>    pick a palette (pins mode=manual) and apply
-#   ,theme.sh auto             hand the choice back to the sun and apply
-#   ,theme.sh toggle           swap between the day and night palettes
-#   ,theme.sh get              print the resolved palette
-#   ,theme.sh wallpaper F [P]  bind a wallpaper to a palette (default: current)
-#   ,theme.sh status           print what each surface is currently set to
+#   ,theme.sh apply                 fan the current theme.json out to everything
+#   ,theme.sh set <palette>         pick a palette (pins mode=manual) and apply
+#   ,theme.sh auto                  hand the choice back to the sun and apply
+#   ,theme.sh toggle                swap between the day and night palettes
+#   ,theme.sh get                   print the resolved palette
+#   ,theme.sh wallpaper F [P]       bind a wallpaper to a palette (default: current)
+#   ,theme.sh mood-wallpaper F [M]  bind a wallpaper to a mood (default: current)
+#   ,theme.sh status                print what each surface is currently set to
 #
 # Writes go through the same store the shell uses, so setting a palette here and
 # setting it from the bar are the same operation.
@@ -37,6 +38,11 @@ PALETTES=(latte frappe macchiato mocha)
 # Which flavours are light. Drives GTK's color-scheme, which is a separate
 # setting from the theme name and is what applications actually branch on.
 LIGHT=(latte)
+
+# The six focus modes (spec: focus-modes.json). Mood is set elsewhere (the
+# shell's focus switcher writes `mood` into theme.json); this script only
+# reads it, to pick a wallpaper — it never sets one itself.
+MOODS=(neutral deep chores reflect game media)
 
 die() {
     printf '%s: %s\n' "${0##*/}" "$1" >&2
@@ -120,6 +126,12 @@ is_light() {
     return 1
 }
 
+is_mood() {
+    local m=$1
+    for known in "${MOODS[@]}"; do [ "$m" = "$known" ] && return 0; done
+    return 1
+}
+
 # --- which palette --------------------------------------------------------
 
 # `mode: auto` means the sun decides; `manual` means a deliberate pick stands
@@ -166,7 +178,14 @@ GSETTINGS=${THEME_GSETTINGS:-gsettings}
 # running them lacks it.
 MAGICK=${THEME_MAGICK:-magick}
 
-# The same hazard, three more times: hyprctl, pkill and hyprpaper all address the
+# awww (swww's maintained continuation, see theming role defaults for why) is
+# two binaries: the client that sets an image, and the daemon it needs already
+# running. Both injectable for the same reason as MAGICK — a test must be able
+# to force "not installed" and "daemon not up yet" without touching the host.
+AWWW=${THEME_AWWW:-awww}
+AWWW_DAEMON=${THEME_AWWW_DAEMON:-awww-daemon}
+
+# The same hazard, three more times: hyprctl, pkill and awww all address the
 # live session by name and ignore $XDG_CONFIG_HOME entirely. Setting
 # THEME_GSETTINGS at all means "this is a test run" and holds every one of them
 # back, so a test can never repaint the desk it is running on.
@@ -408,8 +427,8 @@ apply_transparency() {
 
 # A transparent bar over a high-contrast source image is unreadable, and the
 # fix belongs here rather than in a wallpaper-picking rule: blur+desaturate+tint
-# every wallpaper toward its palette's accent once, and hand hyprpaper the
-# result instead of the original.
+# every wallpaper toward its palette's accent once, and hand awww the result
+# instead of the original.
 #
 # Cached by source mtime rather than content hash — a stat is free and a
 # wallpaper file does not change without its mtime moving. The stamp file next
@@ -448,12 +467,19 @@ process_wallpaper() {
 }
 
 apply_wallpaper() {
-    local palette=$1 wall
+    local palette=$1 mood wall
+    # Mood is the stronger signal — a wallpaper bound to "deep work" should win
+    # over one merely bound to the current palette — so it is looked up first
+    # and only falls through to the palette map when nothing is bound for it.
+    mood=$(get mood "")
+    if [ -n "$mood" ]; then
+        wall=$(jq -r --arg m "$mood" '.moods[$m] // ""' "$STATE" 2>/dev/null || echo "")
+    fi
     # A wallpaper belongs to a palette, not to the desk: the image that reads
     # well behind Latte is rarely the one that reads well behind Mocha. The
     # store keeps a map; `wallpaper` is only the fallback for a palette that has
     # not been given one.
-    wall=$(jq -r --arg p "$palette" '.wallpapers[$p] // ""' "$STATE" 2>/dev/null || echo "")
+    [ -n "${wall:-}" ] || wall=$(jq -r --arg p "$palette" '.wallpapers[$p] // ""' "$STATE" 2>/dev/null || echo "")
     [ -n "$wall" ] || wall=$(get wallpaper "")
     if [ -z "$wall" ]; then
         local dir="$CONFIG/hypr/wallpapers"
@@ -466,19 +492,35 @@ apply_wallpaper() {
     fi
     [ -n "$wall" ] && [ -f "$wall" ] || {
         echo "wallpaper: unchanged"
-        record_failed wallpaper "no wallpaper bound to $palette and no default found"
+        record_failed wallpaper "no wallpaper bound to mood or palette and no default found"
         return
     }
     wall=$(process_wallpaper "$palette" "$wall")
-    sandboxed && {
+    # Unlike MAGICK, calling the real awww has a live-session side effect (it
+    # would actually repaint the desk), so sandboxed() still holds it back —
+    # except when a test has pointed AWWW at its own recorder, the same
+    # exception GSETTINGS gets in apply_gtk. A bare sandboxed run with no
+    # THEME_AWWW override therefore never touches the real binary.
+    if sandboxed && [ -z "${THEME_AWWW-}" ]; then
         echo "wallpaper: skipped (sandboxed)"
         return
-    }
-    have hyprctl || {
-        echo "wallpaper: hyprctl not available"
+    fi
+    have "$AWWW" || {
+        echo "wallpaper: awww not available"
+        record_failed wallpaper "awww not installed"
         return
     }
-    hyprctl hyprpaper reload ,"$wall" >/dev/null 2>&1 || true
+    # `img` is a no-op against a dead daemon, and a fresh session has none yet
+    # — `query` is how both swww and awww probe for that. Starting it here is
+    # what makes a cold session behave the same as a warm one.
+    "$AWWW" query >/dev/null 2>&1 || {
+        "$AWWW_DAEMON" >/dev/null 2>&1 &
+        disown
+        sleep 0.3
+    }
+    # step/fps stand in for the 240ms crossfade the focus-modes spec calls
+    # for — awww has no direct duration knob, only step size and frame rate.
+    "$AWWW" img "$wall" --transition-type simple --transition-step 2 --transition-fps 30 >/dev/null 2>&1 || true
     echo "wallpaper: ${wall##*/}"
     record_applied wallpaper immediate
 }
@@ -557,6 +599,22 @@ cmd_wallpaper() {
     cmd_apply
 }
 
+# Bind a wallpaper to a mood: `,theme.sh mood-wallpaper <file> [mood]`. No
+# `cmd_mood`/`set`-equivalent exists — the mood itself is the shell's to pick,
+# not this script's; this only lets a binding be made without clicking through
+# the shell to do it.
+cmd_mood_wallpaper() {
+    local file=${1-} mood=${2-}
+    [ -n "$file" ] || die "mood-wallpaper needs a file"
+    [ -f "$file" ] || die "no such file: $file"
+    [ -n "$mood" ] || mood=$(get mood "")
+    [ -n "$mood" ] || die "no mood is set; pass one explicitly: ${MOODS[*]}"
+    is_mood "$mood" || die "unknown mood '$mood' (have: ${MOODS[*]})"
+    put "$(jq -n --arg m "$mood" --arg f "$file" '{moods: {($m): $f}}')"
+    echo "wallpaper: $mood -> ${file##*/}"
+    cmd_apply
+}
+
 cmd_status() {
     printf 'store     %s\n' "$STATE"
     printf 'mode      %s\n' "$(get mode auto)"
@@ -579,11 +637,15 @@ wallpaper)
     shift
     cmd_wallpaper "${1-}" "${2-}"
     ;;
+mood-wallpaper)
+    shift
+    cmd_mood_wallpaper "${1-}" "${2-}"
+    ;;
 get)
     resolve
     echo
     ;;
 status) cmd_status ;;
--h | --help | help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+-h | --help | help) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command '${1}' — try --help" ;;
 esac

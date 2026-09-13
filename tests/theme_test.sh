@@ -248,5 +248,91 @@ if command -v magick >/dev/null 2>&1; then
     teardown
 fi
 
+# A recorder standing in for both awww binaries, the same trick THEME_GSETTINGS
+# uses on gsettings. Pointing AWWW/AWWW_DAEMON at it is what tells
+# apply_wallpaper this run may call through — a bare sandboxed run, with
+# neither variable set, still gets held back (checked below).
+awww_stub() {
+    AWWW_LOG="$ROOT/awww.log"
+    : >"$AWWW_LOG"
+    cat >"$ROOT/awww" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$AWWW_LOG"
+[ "$1" = "query" ] && exit 1 # daemon reports dead, every time — exercises the start path
+exit 0
+STUB
+    chmod +x "$ROOT/awww"
+    cat >"$ROOT/awww-daemon" <<'STUB'
+#!/usr/bin/env bash
+printf 'daemon started\n' >>"$AWWW_LOG"
+STUB
+    chmod +x "$ROOT/awww-daemon"
+    export THEME_AWWW="$ROOT/awww" THEME_AWWW_DAEMON="$ROOT/awww-daemon" AWWW_LOG
+}
+
+echo "wallpaper resolution: mood beats palette, palette beats the single fallback"
+setup
+export THEME_MAGICK="$ROOT/no-such-magick-binary" # image processing is not the point here
+awww_stub
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+printf 'single' >"$ROOT/single.png"
+printf 'palette-bound' >"$ROOT/palette.png"
+printf 'mood-bound' >"$ROOT/mood.png"
+
+# Nothing bound yet: falls all the way through to the bare `wallpaper` field.
+printf '{"palette":"mocha","mode":"manual","wallpaper":"%s"}\n' "$ROOT/single.png" >"$STORE"
+"$THEME" apply >/dev/null
+contains "no binding falls back to the single wallpaper" "single.png" "$(cat "$AWWW_LOG")"
+
+# A palette binding outranks the bare fallback.
+"$THEME" wallpaper "$ROOT/palette.png" mocha >/dev/null
+: >"$AWWW_LOG"
+"$THEME" apply >/dev/null
+contains "a palette binding outranks the bare fallback" "palette.png" "$(cat "$AWWW_LOG")"
+
+# A mood binding outranks the palette binding, even though both are set.
+"$THEME" mood-wallpaper "$ROOT/mood.png" deep >/dev/null
+jq '.mood = "deep"' "$STORE" >"$STORE.tmp" && mv "$STORE.tmp" "$STORE"
+: >"$AWWW_LOG"
+"$THEME" apply >/dev/null
+contains "mood wins over the bound palette" "mood.png" "$(cat "$AWWW_LOG")"
+unset THEME_MAGICK THEME_AWWW THEME_AWWW_DAEMON AWWW_LOG
+teardown
+
+echo "wallpaper resolution: an unknown mood is refused, like an unknown palette"
+setup
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+printf 'x' >"$ROOT/x.png"
+if "$THEME" mood-wallpaper "$ROOT/x.png" nightmare >/dev/null 2>&1; then
+    printf '  FAIL an unknown mood was accepted\n'
+    fail=$((fail + 1))
+else
+    printf '  ok   an unknown mood is refused\n'
+    pass=$((pass + 1))
+fi
+teardown
+
+echo "crossfade: awww is asked for a transition, not a hard cut"
+setup
+export THEME_MAGICK="$ROOT/no-such-magick-binary"
+awww_stub
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+printf 'source' >"$XDG_CONFIG_HOME/hypr/wallpapers/mocha.png"
+
+"$THEME" set mocha >/dev/null
+contains "the daemon was started, since query reported it dead" "daemon started" "$(cat "$AWWW_LOG")"
+contains "img was called with a transition, not a bare path" "--transition-type" "$(cat "$AWWW_LOG")"
+unset THEME_MAGICK THEME_AWWW THEME_AWWW_DAEMON AWWW_LOG
+teardown
+
+echo "a sandboxed run never reaches the real awww without an explicit override"
+setup
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+export THEME_MAGICK="$ROOT/no-such-magick-binary"
+printf 'source' >"$XDG_CONFIG_HOME/hypr/wallpapers/mocha.png"
+contains "wallpaper apply reports skipped, not attempted" "skipped (sandboxed)" "$("$THEME" set mocha 2>&1)"
+unset THEME_MAGICK
+teardown
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
