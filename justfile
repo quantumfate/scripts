@@ -28,6 +28,7 @@ lint-py:
 # Tests run against scratch XDG trees, never the machine they run on.
 test:
 	./tests/theme_test.sh
+	./tests/scene_apply_test.sh
 	@pytest -q 2>/dev/null || true
 
 # CI/pre-commit gate. lint-py stays out until its findings are cleared.

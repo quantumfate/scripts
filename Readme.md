@@ -53,5 +53,30 @@ integrate with the shared state / UI:
   obsidian-linear-sync --apply --force       # rewrite managed blocks regardless
   ```
 
+- `bin/,scene-apply.sh` + `bin/,mood-bg.sh` — the mood-mode enforcement seam
+  (LEO-238). `,scene-apply.sh [mode]` is spawned detached by the shell whenever
+  the active focus mood changes and brings user-unit background work in line
+  with it: it stops the units the contract (`etc/scene-managed.json`) maps to
+  the mood's reachable scenes and deferred/prevented background tasks, and
+  hands back whatever the previous mood stopped. Units on the contract's
+  `protected` list are never touched; stops go through systemd (SIGTERM + the
+  unit's `TimeoutStopSec`, never SIGKILL); `graceful` entries are only
+  requested and logged. Every decision lands in
+  `$XDG_STATE_HOME/scene-policy/log.jsonl`, the feed for the scene-policy
+  logging workspace (LEO-241). `--dry-run` prints the plan without touching
+  systemd. `,mood-bg.sh <task>` is the dispatch-time gate for a task's timer:
+  it asks the shell (`focus bg <task>`) and exits 0 to run, 2 to defer, 3 to
+  prevent — the same verdict the mood panel shows.
+
+  ```
+  ,scene-apply.sh game        # gated manual run (the shell triggers this anyway)
+  ,scene-apply.sh --dry-run   # show the plan, touch nothing
+  ,mood-bg.sh obsidian        # timer gate → 0 | 2 | 3
+  ```
+
+  The contract ships from this repo because the actor ships here (the desktop's
+  delivery rule: each repo delivers its own role/data; quickshell never reads
+  `etc/scene-managed.json` — it asks the same policy Focus reads).
+
 How the shared state + IPC bridges work:
 [quickshell/ARCHITECTURE.md](https://codeberg.org/quantumfate/quickshell/blob/main/ARCHITECTURE.md).
