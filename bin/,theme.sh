@@ -202,13 +202,12 @@ apply_hyprland() {
         echo "hyprland: not running"
         return
     }
-    # The accent, as Hyprland spells colours. Pulled from the same table the
-    # shell uses so the border and the bar cannot disagree.
-    local accent
-    accent=$(accent_hex "$palette")
-    hyprctl keyword general:col.active_border "rgb(${accent#\#})" >/dev/null
-    hyprctl keyword general:col.inactive_border "rgb(${accent#\#})88" >/dev/null
-    echo "hyprland: border $accent"
+    # Hyprland's colours come from its own config (hypr/themes/colors.lua reads
+    # this same store), because `hyprctl keyword general:col.*` answers "unknown
+    # request" on a Lua-configured Hyprland — and exits 0, so a script cannot
+    # even tell it failed. Reloading re-runs that file against the new palette.
+    hyprctl reload >/dev/null 2>&1 || true
+    echo "hyprland: reloaded for $palette"
 
     apply_transparency
 }
