@@ -114,15 +114,21 @@ fi
 recorder=$scratch/systemctl
 cat >"$recorder" <<'REC'
 #!/usr/bin/env bash
-# Records what it was asked to do. `is-active` answers yes for the units named
-# in ACTIVE, so a test can describe a desk and see what moves.
+# Answers `show` from three env lists, so a test can describe a desk and see
+# what moves: ACTIVE names running units, MISSING names units nothing
+# installed, ONESHOT names units that are actions rather than states.
 args=("$@")
-verb=${2:-}
 unit=${args[${#args[@]} - 1]}
-if [[ $verb == is-active ]]; then
-    [[ " ${ACTIVE:-} " == *" $unit "* ]] && exit 0 || exit 3
-fi
-echo "$verb $unit" >>"$RECORD"
+for a in "${args[@]}"; do
+    if [[ $a == show ]]; then
+        [[ " ${MISSING:-} " == *" $unit "* ]] && load=not-found || load=loaded
+        [[ " ${ACTIVE:-} " == *" $unit "* ]] && state=active || state=inactive
+        [[ " ${ONESHOT:-} " == *" $unit "* ]] && kind=oneshot || kind=simple
+        printf '%s\n%s\n%s\n' "$load" "$state" "$kind"
+        exit 0
+    fi
+done
+echo "${2:-} $unit" >>"$RECORD"
 exit 0
 REC
 chmod +x "$recorder"
@@ -130,8 +136,9 @@ chmod +x "$recorder"
 apply_with() {
     local active=$1 mode=$2 decl=${3:-$declaration}
     : >"$scratch/record"
-    RECORD=$scratch/record ACTIVE=$active SYSTEMCTL=$recorder \
-        XDG_STATE_HOME=$scratch "$cli" --declaration "$decl" apply "$mode" >/dev/null 2>&1
+    RECORD=$scratch/record ACTIVE=$active MISSING=${MISSING:-} ONESHOT=${ONESHOT:-} \
+        SYSTEMCTL=$recorder XDG_STATE_HOME=$scratch \
+        "$cli" --declaration "$decl" apply "$mode" >/dev/null 2>&1
     sort "$scratch/record" | tr '\n' ' ' | sed 's/ $//'
 }
 
@@ -183,6 +190,46 @@ if [[ $drift_output == *"have drifted"* ]]; then
     echo "  ok   an unimplemented task is reported, not ignored"
 else
     echo "  FAIL an unimplemented task should be reported"
+    fail=1
+fi
+
+# A unit nothing installed is named once and skipped. Retrying it will never
+# succeed, and attempting it every transition turns a packaging problem into
+# permanent noise that hides real failures.
+missing_run=$(MISSING="theme-auto.service theme-auto.timer" apply_with "" neutral)
+if [[ $missing_run == *"theme-auto"* ]]; then
+    echo "  FAIL a unit that is not installed should not be attempted"
+    fail=1
+else
+    echo "  ok   a unit that is not installed is skipped"
+fi
+
+missing_report=$(MISSING="theme-auto.service" RECORD=$scratch/record ACTIVE='' SYSTEMCTL=$recorder \
+    XDG_STATE_HOME=$scratch "$cli" --declaration "$declaration" apply neutral 2>&1)
+if [[ $missing_report == *"not installed: theme-auto.service"* ]]; then
+    echo "  ok   a missing unit is named once"
+else
+    echo "  FAIL a missing unit should be named"
+    fail=1
+fi
+
+# A oneshot is an action, not a state: starting one means "run it now", which
+# is its timer's job. Left alone when admitted, so a transition does not
+# re-trigger a sync every time it runs.
+oneshot_run=$(ONESHOT="obsidian-linear-sync.service" apply_with "" neutral)
+if [[ $oneshot_run == *"start obsidian-linear-sync.service"* ]]; then
+    echo "  FAIL a oneshot should not be started by a transition"
+    fail=1
+else
+    echo "  ok   a oneshot is left to its timer"
+fi
+
+# Stopping one is still meaningful: it cancels a run in flight.
+oneshot_stop=$(ONESHOT="obsidian-linear-sync.service" apply_with "obsidian-linear-sync.service" game)
+if [[ $oneshot_stop == *"stop obsidian-linear-sync.service"* ]]; then
+    echo "  ok   a oneshot in flight is still cancelled"
+else
+    echo "  FAIL a running oneshot should be stoppable"
     fail=1
 fi
 

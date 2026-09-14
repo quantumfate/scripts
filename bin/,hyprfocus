@@ -258,8 +258,25 @@ def systemctl(*args: str, check: bool = False) -> subprocess.CompletedProcess:
     )
 
 
-def is_active(unit: str) -> bool:
-    return systemctl("is-active", "--quiet", unit).returncode == 0
+def unit_state(unit: str) -> tuple[str, str, str]:
+    """(load, active, type) for a unit, in one query.
+
+    Read rather than assumed, because the three cases behave differently and
+    conflating them is how a transition reports noise instead of a problem.
+    """
+    result = systemctl(
+        "show", "-p", "LoadState", "-p", "ActiveState", "-p", "Type", "--value", unit
+    )
+    lines = (result.stdout or "").splitlines()
+    while len(lines) < 3:
+        lines.append("")
+    return lines[0].strip(), lines[1].strip(), lines[2].strip()
+
+
+def is_active(state: str) -> bool:
+    # `activating` counts: a oneshot part-way through its run is not something
+    # to start again, and a service still coming up does not want restarting.
+    return state in ("active", "activating", "reloading")
 
 
 def log(entry: dict) -> None:
@@ -294,10 +311,21 @@ def print_desk(desk: dict) -> None:
 def apply(declaration: dict, mode: str, dry_run: bool) -> int:
     """Bring background work in line with a mode.
 
-    Stops are SIGTERM plus the unit's own TimeoutStopSec, which is what
-    `systemctl stop` already does — never SIGKILL, and never a hand-rolled
-    timeout racing systemd's own. Starts wait on the unit becoming active
-    rather than on a sleep, so a failure is reported instead of assumed away.
+    Three kinds of unit, which behave differently enough that conflating them
+    reports noise instead of a problem:
+
+    * **missing** — nothing installed it. Retrying will never succeed, so it is
+      named once and skipped rather than attempted on every transition.
+    * **oneshot** — an action, not a state. `systemctl start` on one means "run
+      it now", which is its timer's job; admitting the task means making sure
+      the timer runs. Stopping one is still meaningful: it cancels a run in
+      flight.
+    * **everything else** — started if the mode wants it and it is not already
+      up, stopped if it does not.
+
+    Stops go through systemctl, which is SIGTERM plus the unit's own
+    TimeoutStopSec — never SIGKILL, and never a hand-rolled timeout racing
+    systemd's own.
     """
     desk = resolve(declaration, mode)
     spec = contract()
@@ -309,33 +337,48 @@ def apply(declaration: dict, mode: str, dry_run: bool) -> int:
 
     # The protected rail wins over any declaration. A store edited by hand
     # should not be able to stop the audio stack or the idle daemon.
-    stop = sorted((known - wanted) - protected)
-    start = sorted(wanted - protected)
+    candidates = sorted((known | wanted) - protected)
+    states = {unit: unit_state(unit) for unit in candidates}
+
+    stop, start, missing, timers = [], [], [], []
+    for unit in candidates:
+        load, active, kind = states[unit]
+        if load != "loaded":
+            missing.append(unit)
+        elif unit in wanted:
+            if kind == "oneshot":
+                timers.append(unit)
+            elif not is_active(active):
+                start.append(unit)
+        elif is_active(active):
+            stop.append(unit)
 
     if unmapped:
         print(
             f"warning: no units for {', '.join(unmapped)} — declaration and contract have drifted",
             file=sys.stderr,
         )
+    if missing:
+        print(f"warning: not installed: {', '.join(missing)}", file=sys.stderr)
 
     if dry_run:
         for unit in stop:
             print(f"  stop    {unit}")
         for unit in start:
             print(f"  start   {unit}")
+        for unit in timers:
+            print(f"  (timer) {unit}")
         if not stop and not start:
             print(f"already {mode}; nothing to do")
         return 0
 
     stopped, started, failed = [], [], []
     for unit in stop:
-        if is_active(unit):
-            result = systemctl("stop", unit)
-            (stopped if result.returncode == 0 else failed).append(unit)
+        result = systemctl("stop", unit)
+        (stopped if result.returncode == 0 else failed).append(unit)
     for unit in start:
-        if not is_active(unit):
-            result = systemctl("start", unit)
-            (started if result.returncode == 0 else failed).append(unit)
+        result = systemctl("start", unit)
+        (started if result.returncode == 0 else failed).append(unit)
 
     log(
         {
@@ -343,6 +386,7 @@ def apply(declaration: dict, mode: str, dry_run: bool) -> int:
             "stopped": stopped,
             "started": started,
             "failed": failed,
+            "missing": missing,
             "unmapped": unmapped,
         }
     )
@@ -353,10 +397,14 @@ def apply(declaration: dict, mode: str, dry_run: bool) -> int:
         print(f"  started {unit}")
     for unit in failed:
         print(f"  FAILED  {unit}", file=sys.stderr)
+    if not stopped and not started and not failed:
+        print(f"already {mode}; nothing to do")
 
     # A unit that would not move is reported, not fatal: one stubborn service
-    # must not leave the desk wedged between two modes.
-    return 0
+    # must not leave the desk wedged between two modes. Missing units are not a
+    # failure of this run either — they are a packaging problem, and saying so
+    # once is more useful than failing every transition until it is fixed.
+    return 1 if failed else 0
 
 
 def main() -> None:
