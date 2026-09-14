@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+""",hyprfocus — inspect and explain the hyprfocus declaration.
+
+A mode declares a desk; the system converges on it. This is the command-line
+way in, and it is Python rather than shell because the declaration is JSON and
+resolving it is set arithmetic.
+
+It deliberately works with no compositor and no shell running: the declaration
+is a file, and answering "what does study mode mean" should not depend on the
+thing it configures being up. That is also why the read-only verbs are useful
+on their own — `plan` tells you what a transition would take away before you
+enter it.
+
+  ,hyprfocus resolve <mode>   the complete desk that mode means
+  ,hyprfocus plan <mode>      what would change from the mode running now
+  ,hyprfocus explain          which mode is on, who set it, and when
+  ,hyprfocus modes            every declared mode
+
+`apply` is deliberately absent until the executor lands: a verb that claims to
+change the desk and does not would be worse than one that is missing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+KINDS = ("workspaces", "bindings", "services", "projects")
+REF_KIND = {
+    "workspace": "workspaces",
+    "binding": "bindings",
+    "service": "services",
+    "project": "projects",
+}
+KIND_REF = {plural: singular for singular, plural in REF_KIND.items()}
+
+
+def state_dir() -> Path:
+    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+
+
+def load(path: Path | None) -> dict:
+    target = path or state_dir() / "hyprfocus.json"
+    try:
+        return json.loads(target.read_text())
+    except FileNotFoundError:
+        sys.exit(f"no declaration at {target}")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{target}: {exc}")
+
+
+def apply_delta(base: list[str], delta: dict | None, where: str) -> list[str]:
+    """One kind's delta against the base, preserving declaration order.
+
+    Deltas are a writing convenience with no runtime existence: everything acts
+    on the resolved desk, never on a delta, so a mode always means the same
+    thing however it was reached.
+    """
+    if not delta:
+        return list(base)
+    if "only" in delta and ("add" in delta or "remove" in delta):
+        sys.exit(f"{where}: `only` cannot be combined with `add` or `remove`")
+    if "only" in delta:
+        return list(delta["only"])
+
+    removed = set(delta.get("remove", []))
+    out = [name for name in base if name not in removed]
+    for name in delta.get("add", []):
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def close_deps(desk: dict, base: dict, mode: str, removed: dict[str, set[str]]) -> None:
+    """Pull in what the admitted resources imply, transitively.
+
+    Two strengths, mirroring systemd rather than inventing a vocabulary:
+    `requires` cannot function without it, so a mode that removes one is a
+    conflict; `wants` merely uses it, so a mode that removes one wins silently.
+    """
+    graphs = {"requires": base.get("requires", {}), "wants": base.get("wants", {})}
+    present = {kind: set(desk[kind]) for kind in KINDS}
+    queue = [f"{KIND_REF[kind]}:{name}" for kind in KINDS for name in desk[kind]]
+    seen: set[str] = set()
+
+    while queue:
+        key = queue.pop(0)
+        if key in seen:
+            continue
+        seen.add(key)
+        for strength, graph in graphs.items():
+            for ref in graph.get(key, []):
+                singular, _, name = ref.partition(":")
+                kind = REF_KIND.get(singular)
+                if not kind:
+                    sys.exit(
+                        f"mode '{mode}': malformed {strength} reference '{ref}' on {key}"
+                    )
+                if name in removed[kind]:
+                    if strength == "requires":
+                        sys.exit(
+                            f"mode '{mode}': {kind} '{name}' is removed but required by {key}"
+                        )
+                    continue
+                if name not in present[kind]:
+                    present[kind].add(name)
+                    desk[kind].append(name)
+                    queue.append(ref)
+
+
+def resolve(declaration: dict, mode: str) -> dict:
+    base = declaration.get("base", {})
+    spec = declaration.get("modes", {}).get(mode)
+    if spec is None:
+        known = ", ".join(sorted(declaration.get("modes", {})))
+        sys.exit(f"unknown mode '{mode}' (known: {known})")
+
+    desk = {"mode": mode}
+    removed: dict[str, set[str]] = {}
+    for kind in KINDS:
+        desk[kind] = apply_delta(
+            base.get(kind, []), spec.get(kind), f"mode '{mode}', {kind}"
+        )
+        # Only `remove` is an explicit refusal. `only` says what to inherit, so
+        # the dependency closure may still widen it.
+        removed[kind] = set((spec.get(kind) or {}).get("remove", []))
+
+    close_deps(desk, base, mode, removed)
+
+    for kind in KINDS:
+        unknown = set(desk[kind]) - set(base.get(kind, []))
+        if unknown:
+            sys.exit(
+                f"mode '{mode}': unknown {kind} {sorted(unknown)} — not declared in base"
+            )
+
+    admitted = set(desk["workspaces"])
+    desk["scenes"] = {
+        ws: s for ws, s in base.get("scenes", {}).items() if ws in admitted
+    }
+    desk["notify"] = {**base.get("notify", {}), **spec.get("notify", {})}
+    desk["revoke"] = {**base.get("revoke", {}), **spec.get("revoke", {})}
+    return desk
+
+
+def revocation(desk: dict, kind: str, name: str) -> str:
+    """How a resource is given up. Windows hold, background work retires.
+
+    The two differ in how a resource is given up, not in whether it returns:
+    what comes back is decided by the next desk.
+    """
+    declared = desk.get("revoke", {}).get(name)
+    if declared:
+        return declared
+    return "hold" if kind in ("workspaces", "projects") else "retire"
+
+
+def plan(desk: dict, running: dict) -> list[tuple[str, str, str]]:
+    """Steps from the running desk to the desired one.
+
+    Give up before taking on, so a transition never briefly runs both desks —
+    on a machine being asked to reclaim resources that is the opposite of what
+    was wanted. Revoke dependents first, admit dependencies first.
+    """
+    steps = []
+    for kind in ("projects", "bindings", "services", "workspaces"):
+        for name in running.get(kind, []):
+            if name not in desk[kind]:
+                steps.append((revocation(desk, kind, name), kind, name))
+    for kind in ("workspaces", "services", "bindings", "projects"):
+        for name in desk[kind]:
+            if name not in running.get(kind, []):
+                steps.append(("admit", kind, name))
+    return steps
+
+
+def active(declaration: dict) -> dict:
+    """The mode pointer, with whatever provenance it carries."""
+    try:
+        return json.loads((state_dir() / "focus.json").read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"mode": "neutral"}
+
+
+def print_desk(desk: dict) -> None:
+    print(f"{'mode':<12}{desk['mode']}")
+    for kind in KINDS:
+        print(f"{kind:<12}{', '.join(desk[kind]) or '—'}")
+    scenes = ", ".join(sorted(desk["scenes"])) or "—"
+    print(f"{'scenes':<12}{scenes}")
+    routes = desk.get("notify", {})
+    if routes:
+        print(f"{'notify':<12}{json.dumps(routes, sort_keys=True)}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog=",hyprfocus", description=__doc__.split("\n")[0]
+    )
+    parser.add_argument(
+        "--declaration", type=Path, help="declaration to read (default: the store)"
+    )
+    sub = parser.add_subparsers(dest="verb", required=True)
+    sub.add_parser("modes", help="list every declared mode")
+    sub.add_parser("explain", help="which mode is on, who set it, and when")
+    for verb, help_text in (
+        ("resolve", "the desk a mode means"),
+        ("plan", "what would change"),
+    ):
+        p = sub.add_parser(verb, help=help_text)
+        p.add_argument("mode")
+
+    args = parser.parse_args()
+    declaration = load(args.declaration)
+
+    if args.verb == "modes":
+        current = active(declaration).get("mode")
+        for name, spec in sorted(declaration.get("modes", {}).items()):
+            marker = "*" if name == current else " "
+            print(f"{marker} {name:<10}{spec.get('name', '')}")
+        return
+
+    if args.verb == "explain":
+        pointer = active(declaration)
+        mode = pointer.get("mode", "neutral")
+        print(f"{'mode':<10}{mode}")
+        # Provenance matters once a schedule can change the mode on its own:
+        # "why did my desk just change" needs an answer that is not guesswork.
+        print(f"{'set by':<10}{pointer.get('source', 'unknown')}")
+        if pointer.get("set_at"):
+            print(f"{'at':<10}{pointer['set_at']}")
+        print(f"{'until':<10}{pointer.get('until') or 'open-ended'}")
+        return
+
+    if args.verb == "resolve":
+        print_desk(resolve(declaration, args.mode))
+        return
+
+    desired = resolve(declaration, args.mode)
+    running = resolve(declaration, active(declaration).get("mode", "neutral"))
+    steps = plan(desired, running)
+    if not steps:
+        print(f"already {args.mode}; nothing to do")
+        return
+    takes = [s for s in steps if s[0] in ("hold", "retire")]
+    print(f"{len(steps)} steps, {len(takes)} take something away")
+    for action, kind, name in steps:
+        print(f"  {action:<7}{kind:<11}{name}")
+
+
+if __name__ == "__main__":
+    main()
