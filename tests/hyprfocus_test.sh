@@ -74,6 +74,41 @@ else
     echo "  ok   an unknown mode exits non-zero"
 fi
 
+# Seeding, against a scratch state tree — never the machine this runs on.
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+check "seeding installs the declaration" \
+    "seeded $scratch/hyprfocus.json (7 modes)" \
+    "$(XDG_STATE_HOME=$scratch "$cli" seed "$declaration")"
+
+# The store is edited at runtime, so a seed that clobbered it would throw away
+# whatever was tuned by hand.
+if XDG_STATE_HOME=$scratch "$cli" seed "$declaration" >/dev/null 2>&1; then
+    echo "  FAIL seeding over an existing store should refuse"
+    fail=1
+else
+    echo "  ok   seeding over an existing store refuses"
+fi
+
+if XDG_STATE_HOME=$scratch "$cli" seed "$declaration" --force >/dev/null 2>&1; then
+    echo "  ok   --force replaces it"
+else
+    echo "  FAIL --force should replace it"
+    fail=1
+fi
+
+# A declaration that cannot resolve is one the desk would fail on at the next
+# mode change; failing at seed time is the cheaper place to find out.
+broken=$scratch/broken.json
+sed 's/"gaming", "comms"/"gamming", "comms"/' "$declaration" >"$broken"
+if XDG_STATE_HOME=$scratch "$cli" seed "$broken" --force >/dev/null 2>&1; then
+    echo "  FAIL seeding an unresolvable declaration should refuse"
+    fail=1
+else
+    echo "  ok   seeding an unresolvable declaration refuses"
+fi
+
 echo
 [[ $fail -eq 0 ]] && echo "hyprfocus: all checks passed" || echo "hyprfocus: failures above"
 exit $fail

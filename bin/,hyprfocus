@@ -15,6 +15,7 @@ enter it.
   ,hyprfocus plan <mode>      what would change from the mode running now
   ,hyprfocus explain          which mode is on, who set it, and when
   ,hyprfocus modes            every declared mode
+  ,hyprfocus seed <file>      install a declaration into the store
 
 `apply` is deliberately absent until the executor lands: a verb that claims to
 change the desk and does not would be worse than one that is missing.
@@ -177,6 +178,39 @@ def plan(desk: dict, running: dict) -> list[tuple[str, str, str]]:
     return steps
 
 
+def seed(source: Path, force: bool) -> None:
+    """Install a declaration into the store.
+
+    The shell seeds its own stores from QML literals when a file is missing,
+    but the declaration is read by the compositor too, and a desk that comes up
+    before the shell does should not be waiting on it. This puts the file in
+    place from either side.
+
+    It refuses to overwrite by default: the store is edited at runtime, so a
+    seed that clobbered it would throw away whatever was tuned by hand.
+    """
+    target = state_dir() / "hyprfocus.json"
+    if target.exists() and not force:
+        sys.exit(f"{target} already exists; pass --force to replace it")
+
+    try:
+        declaration = json.loads(source.read_text())
+    except FileNotFoundError:
+        sys.exit(f"no declaration at {source}")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{source}: {exc}")
+
+    # Resolving every mode before writing: a declaration that cannot resolve is
+    # one the desk would fail on at the next mode change, and failing here is
+    # the cheaper place to find out.
+    for mode in declaration.get("modes", {}):
+        resolve(declaration, mode)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(declaration, indent=2) + "\n")
+    print(f"seeded {target} ({len(declaration.get('modes', {}))} modes)")
+
+
 def active(declaration: dict) -> dict:
     """The mode pointer, with whatever provenance it carries."""
     try:
@@ -205,6 +239,11 @@ def main() -> None:
     )
     sub = parser.add_subparsers(dest="verb", required=True)
     sub.add_parser("modes", help="list every declared mode")
+    seed_parser = sub.add_parser("seed", help="install a declaration into the store")
+    seed_parser.add_argument("source", type=Path)
+    seed_parser.add_argument(
+        "--force", action="store_true", help="replace an existing store"
+    )
     sub.add_parser("explain", help="which mode is on, who set it, and when")
     for verb, help_text in (
         ("resolve", "the desk a mode means"),
@@ -214,6 +253,13 @@ def main() -> None:
         p.add_argument("mode")
 
     args = parser.parse_args()
+
+    # Seeding is the one verb that does not need a declaration already in place
+    # — it is how one gets there.
+    if args.verb == "seed":
+        seed(args.source, args.force)
+        return
+
     declaration = load(args.declaration)
 
     if args.verb == "modes":
