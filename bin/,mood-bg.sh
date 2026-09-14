@@ -18,8 +18,14 @@ task=${1:?usage: ,mood-bg.sh <task>}
 verdict=$(qs -c quantumfate ipc call -- focus bg "$task" 2>/dev/null) || verdict=allow
 
 case "$verdict" in
-    allow | unset) exit 0 ;;
-    defer) echo "deferred: $task waits for a friendlier mood" >&2; exit 2 ;;
-    prevent | blocked) echo "$verdict: $task is off while the current mood runs" >&2; exit 3 ;;
-    *) exit 0 ;;   # unknown verdict — treat as open
+allow | unset) exit 0 ;;
+defer)
+    echo "deferred: $task waits for a friendlier mood" >&2
+    exit 2
+    ;;
+prevent | blocked)
+    echo "$verdict: $task is off while the current mood runs" >&2
+    exit 3
+    ;;
+*) exit 0 ;; # unknown verdict — treat as open
 esac

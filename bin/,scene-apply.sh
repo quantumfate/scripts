@@ -47,19 +47,25 @@ dry_run=0
 mode_arg=""
 for arg in "$@"; do
     case "$arg" in
-        --dry-run) dry_run=1 ;;
-        --help | -h | help)
-            sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
-            exit 0
-            ;;
-        *) mode_arg="$arg" ;;
+    --dry-run) dry_run=1 ;;
+    --help | -h | help)
+        sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+        exit 0
+        ;;
+    *) mode_arg="$arg" ;;
     esac
 done
 
-need() { command -v "$1" >/dev/null 2>&1 || { echo ",scene-apply.sh: missing $1" >&2; exit 1; }; }
+need() { command -v "$1" >/dev/null 2>&1 || {
+    echo ",scene-apply.sh: missing $1" >&2
+    exit 1
+}; }
 need jq
 
-[ -f "$contract" ] || { echo ",scene-apply.sh: missing contract $contract" >&2; exit 1; }
+[ -f "$contract" ] || {
+    echo ",scene-apply.sh: missing contract $contract" >&2
+    exit 1
+}
 mkdir -p "$log_dir"
 
 ts() { date +%s; }
@@ -131,8 +137,8 @@ add_stop() {
         return
     fi
     case " $stop_units " in
-        *" $unit "*) ;;
-        *) stop_units="$stop_units $unit" ;;
+    *" $unit "*) ;;
+    *) stop_units="$stop_units $unit" ;;
     esac
 }
 
@@ -168,8 +174,8 @@ done < <(printf '%s' "$mood" | jq -r '.background.prevent[]? // empty')
 starts=""
 for unit in "${stopped_now[@]}"; do
     case " $stop_units " in
-        *" $unit "*) ;;
-        *) starts="$starts $unit" ;;
+    *" $unit "*) ;;
+    *) starts="$starts $unit" ;;
     esac
 done
 
