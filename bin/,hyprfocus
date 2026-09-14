@@ -16,9 +16,11 @@ enter it.
   ,hyprfocus explain          which mode is on, who set it, and when
   ,hyprfocus modes            every declared mode
   ,hyprfocus seed <file>      install a declaration into the store
+  ,hyprfocus apply <mode>     bring background work in line with a mode
 
-`apply` is deliberately absent until the executor lands: a verb that claims to
-change the desk and does not would be worse than one that is missing.
+`apply` covers background work only. Workspaces, binding trees and window
+geometry belong to the compositor, which acts on the same declaration from its
+own side; this half can run with no compositor at all, which is the point.
 """
 
 from __future__ import annotations
@@ -26,7 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 KINDS = ("workspaces", "bindings", "services", "projects")
@@ -211,6 +215,63 @@ def seed(source: Path, force: bool) -> None:
     print(f"seeded {target} ({len(declaration.get('modes', {}))} modes)")
 
 
+CONTRACT = Path(__file__).resolve().parent.parent / "etc" / "scene-managed.json"
+
+
+def contract() -> dict:
+    """The task-to-units map and the protected rail.
+
+    The declaration names *tasks*; this says which units implement them. The
+    split is deliberate: which services a mode runs is a preference edited
+    live, what a task consists of is a system fact edited in unit files.
+    """
+    try:
+        return json.loads(CONTRACT.read_text())
+    except FileNotFoundError:
+        sys.exit(f"no contract at {CONTRACT}")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{CONTRACT}: {exc}")
+
+
+def units_for(tasks: dict, names: list[str]) -> tuple[set[str], list[str]]:
+    """Units implementing these tasks, and any task nothing implements.
+
+    An unmapped task is reported rather than ignored: it means the declaration
+    and the unit files have drifted, and silently doing nothing is how that
+    goes unnoticed until a mode stops working.
+    """
+    units: set[str] = set()
+    unmapped = []
+    for name in names:
+        mapped = tasks.get(name)
+        if mapped is None:
+            unmapped.append(name)
+        else:
+            units.update(mapped)
+    return units, unmapped
+
+
+def systemctl(*args: str, check: bool = False) -> subprocess.CompletedProcess:
+    binary = os.environ.get("SYSTEMCTL", "systemctl")
+    return subprocess.run(
+        [binary, "--user", *args], capture_output=True, text=True, check=check
+    )
+
+
+def is_active(unit: str) -> bool:
+    return systemctl("is-active", "--quiet", unit).returncode == 0
+
+
+def log(entry: dict) -> None:
+    """Append a decision. With a schedule able to change the mode on its own,
+    "why did my desk do that" stops being a debugging question."""
+    directory = state_dir() / "hyprfocus"
+    directory.mkdir(parents=True, exist_ok=True)
+    entry["at"] = datetime.now(timezone.utc).isoformat()
+    with (directory / "log.jsonl").open("a") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
 def active(declaration: dict) -> dict:
     """The mode pointer, with whatever provenance it carries."""
     try:
@@ -228,6 +289,74 @@ def print_desk(desk: dict) -> None:
     routes = desk.get("notify", {})
     if routes:
         print(f"{'notify':<12}{json.dumps(routes, sort_keys=True)}")
+
+
+def apply(declaration: dict, mode: str, dry_run: bool) -> int:
+    """Bring background work in line with a mode.
+
+    Stops are SIGTERM plus the unit's own TimeoutStopSec, which is what
+    `systemctl stop` already does — never SIGKILL, and never a hand-rolled
+    timeout racing systemd's own. Starts wait on the unit becoming active
+    rather than on a sleep, so a failure is reported instead of assumed away.
+    """
+    desk = resolve(declaration, mode)
+    spec = contract()
+    tasks = spec.get("tasks", {})
+    protected = set(spec.get("protected", []))
+
+    wanted, unmapped = units_for(tasks, desk["services"])
+    known, _ = units_for(tasks, list(tasks))
+
+    # The protected rail wins over any declaration. A store edited by hand
+    # should not be able to stop the audio stack or the idle daemon.
+    stop = sorted((known - wanted) - protected)
+    start = sorted(wanted - protected)
+
+    if unmapped:
+        print(
+            f"warning: no units for {', '.join(unmapped)} — declaration and contract have drifted",
+            file=sys.stderr,
+        )
+
+    if dry_run:
+        for unit in stop:
+            print(f"  stop    {unit}")
+        for unit in start:
+            print(f"  start   {unit}")
+        if not stop and not start:
+            print(f"already {mode}; nothing to do")
+        return 0
+
+    stopped, started, failed = [], [], []
+    for unit in stop:
+        if is_active(unit):
+            result = systemctl("stop", unit)
+            (stopped if result.returncode == 0 else failed).append(unit)
+    for unit in start:
+        if not is_active(unit):
+            result = systemctl("start", unit)
+            (started if result.returncode == 0 else failed).append(unit)
+
+    log(
+        {
+            "mode": mode,
+            "stopped": stopped,
+            "started": started,
+            "failed": failed,
+            "unmapped": unmapped,
+        }
+    )
+
+    for unit in stopped:
+        print(f"  stopped {unit}")
+    for unit in started:
+        print(f"  started {unit}")
+    for unit in failed:
+        print(f"  FAILED  {unit}", file=sys.stderr)
+
+    # A unit that would not move is reported, not fatal: one stubborn service
+    # must not leave the desk wedged between two modes.
+    return 0
 
 
 def main() -> None:
@@ -251,6 +380,13 @@ def main() -> None:
     ):
         p = sub.add_parser(verb, help=help_text)
         p.add_argument("mode")
+    apply_parser = sub.add_parser(
+        "apply", help="bring background work in line with a mode"
+    )
+    apply_parser.add_argument("mode")
+    apply_parser.add_argument(
+        "--dry-run", action="store_true", help="print the plan without acting"
+    )
 
     args = parser.parse_args()
 
@@ -284,6 +420,9 @@ def main() -> None:
     if args.verb == "resolve":
         print_desk(resolve(declaration, args.mode))
         return
+
+    if args.verb == "apply":
+        sys.exit(apply(declaration, args.mode, args.dry_run))
 
     desired = resolve(declaration, args.mode)
     running = resolve(declaration, active(declaration).get("mode", "neutral"))

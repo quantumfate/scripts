@@ -109,6 +109,92 @@ else
     echo "  ok   seeding an unresolvable declaration refuses"
 fi
 
+# Applying, against a recorder rather than the machine's own systemd. Nothing
+# in this file may touch a real unit.
+recorder=$scratch/systemctl
+cat >"$recorder" <<'REC'
+#!/usr/bin/env bash
+# Records what it was asked to do. `is-active` answers yes for the units named
+# in ACTIVE, so a test can describe a desk and see what moves.
+args=("$@")
+verb=${2:-}
+unit=${args[${#args[@]} - 1]}
+if [[ $verb == is-active ]]; then
+    [[ " ${ACTIVE:-} " == *" $unit "* ]] && exit 0 || exit 3
+fi
+echo "$verb $unit" >>"$RECORD"
+exit 0
+REC
+chmod +x "$recorder"
+
+apply_with() {
+    local active=$1 mode=$2 decl=${3:-$declaration}
+    : >"$scratch/record"
+    RECORD=$scratch/record ACTIVE=$active SYSTEMCTL=$recorder \
+        XDG_STATE_HOME=$scratch "$cli" --declaration "$decl" apply "$mode" >/dev/null 2>&1
+    sort "$scratch/record" | tr '\n' ' ' | sed 's/ $//'
+}
+
+full_suite="obsidian.service obsidian-index-normalize.service obsidian-linear-sync.service obsidian-linear-sync.timer"
+baseline="theme-auto.service theme-auto.timer state-backup.service state-backup.timer audio-notify.service"
+
+check "entering game stops the Obsidian suite" \
+    "stop obsidian-index-normalize.service stop obsidian-linear-sync.service stop obsidian-linear-sync.timer stop obsidian.service" \
+    "$(apply_with "$full_suite $baseline" game)"
+
+check "leaving game starts them again" \
+    "start obsidian-index-normalize.service start obsidian-linear-sync.service start obsidian-linear-sync.timer start obsidian.service" \
+    "$(apply_with "$baseline" neutral)"
+
+# A unit already in the state the mode wants is left alone: switching between
+# two modes that share a service must not stop and restart it.
+check "a service both modes want is not touched" \
+    "" \
+    "$(apply_with "$baseline $full_suite" neutral)"
+
+# The protected rail wins over any declaration: a hand-edited store must not be
+# able to stop the audio stack or the idle daemon. Other units still move, so
+# what is asserted is that no protected one was asked to stop.
+protected_run=$(apply_with "pipewire.service hypridle.service theme-auto.service" game)
+if [[ $protected_run == *"stop pipewire"* || $protected_run == *"stop hypridle"* ]]; then
+    echo "  FAIL a protected unit was stopped"
+    fail=1
+else
+    echo "  ok   protected units are never stopped"
+fi
+
+# Drift is reported rather than silently doing nothing: a task the contract
+# does not implement means the declaration and the unit files have diverged.
+drifted=$scratch/drifted.json
+python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+d['base']['services'].append('ghost')
+d['modes']['neutral']['services'] = {'add': ['ghost']}
+json.dump(d, open(sys.argv[2], 'w'))
+" "$declaration" "$drifted"
+
+# Captured rather than piped into grep: `grep -q` exits on the first match, the
+# writer takes SIGPIPE, and `pipefail` would turn a passing check into a
+# failing one.
+drift_output=$(RECORD=$scratch/record ACTIVE='' SYSTEMCTL=$recorder XDG_STATE_HOME=$scratch \
+    "$cli" --declaration "$drifted" apply neutral 2>&1)
+if [[ $drift_output == *"have drifted"* ]]; then
+    echo "  ok   an unimplemented task is reported, not ignored"
+else
+    echo "  FAIL an unimplemented task should be reported"
+    fail=1
+fi
+
+# Every decision is appended: with a schedule able to change the mode on its
+# own, "why did my desk do that" needs an answer.
+if [[ -s $scratch/hyprfocus/log.jsonl ]]; then
+    echo "  ok   decisions are logged"
+else
+    echo "  FAIL decisions should be logged"
+    fail=1
+fi
+
 echo
 [[ $fail -eq 0 ]] && echo "hyprfocus: all checks passed" || echo "hyprfocus: failures above"
 exit $fail
