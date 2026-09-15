@@ -60,7 +60,8 @@ not_contains() {
 setup() {
     ROOT=$(mktemp -d)
     export XDG_STATE_HOME="$ROOT/state"
-    mkdir -p "$XDG_STATE_HOME"
+    export QF_STORE="$XDG_STATE_HOME/quantum-store"
+    mkdir -p "$XDG_STATE_HOME" "$QF_STORE"
 
     # The systemctl recorder. Appends its arguments and succeeds, so the script
     # takes the same path it would on a real desk without touching one.
@@ -80,73 +81,78 @@ teardown() {
 
 run() { "$SCENE_APPLY" "$@"; }
 stopper() { cat "$SYSTEMCTL_LOG"; }
-scan_units() { jq -r --arg s "$1" '.scenes[$s].stop[]?' "$CONTRACT"; }
-graceful_units() { jq -r --arg s "$1" '.scenes[$s].graceful[]?' "$CONTRACT"; }
-
-echo "gaming: the mood's reachable scene brings the contract's stop list under systemd"
+echo "the contract is a pure capability map: no scene key anywhere (LEO-270)"
 setup
-printf '{"mode":"game","until":null}' >"$XDG_STATE_HOME/focus.json"
-run game
-for unit in $(scan_units gaming); do
-    contains "gaming stops $unit" "--user stop $unit" "$(stopper)"
-done
-for unit in $(graceful_units gaming); do
-    not_contains "graceful $unit is never stopped, only requested" "--user stop $unit" "$(stopper)"
-done
-for unit in $(jq -r '.protected[]?' "$CONTRACT"); do
-    not_contains "protected $unit is never touched" "--user stop $unit" "$(stopper)"
-done
-check "the applied state records the mood that stopped them" "game" \
-    "$(jq -r '.mode' "$XDG_STATE_HOME/scene-policy/applied.json")"
+check "the contract carries protected + tasks only" "protected,tasks" \
+    "$(jq -r 'keys | sort | join(",")' "$CONTRACT")"
 teardown
 
-echo "returning to neutral hands the stopped units back"
+echo "gaming: scene reachability stops nothing here - the declaration's services do"
 setup
-printf '{"mode":"game","until":null}' >"$XDG_STATE_HOME/focus.json"
-run game
-printf '{"mode":"neutral","until":null}' >"$XDG_STATE_HOME/focus.json"
-run neutral
-for unit in $(scan_units gaming); do
-    contains "leaving gaming restarts $unit" "--user start $unit" "$(stopper)"
+jq '.moods.gaming.background = {"policy":"allow","allow":["*"],"defer":[],"prevent":[]}' \
+    "$FIXTURE" >"$XDG_STATE_HOME/mood-policy.json"
+printf '{"mode":"gaming","until":null}' >"$XDG_STATE_HOME/focus.json"
+run gaming
+not_contains "scene-apply stops nothing for a reachable scene" "--user stop obsidian" "$(stopper)"
+check "the applied state records the mood that stopped them" "gaming" \
+    "$(jq -r '.mode' "$QF_STORE/scene-policy/applied.json")"
+teardown
+
+echo "no mood-policy with real gate decision leaves units untouched"
+setup
+for mode in gaming work study; do
+    printf '{"mode":"%s","until":null}' "$mode" >"$XDG_STATE_HOME/focus.json"
+    run "$mode"
 done
-check "neutral's applied state stops nothing" "<none>" \
-    "$(jq -r '.stopped | if length == 0 then "<none>" else .[] end' "$XDG_STATE_HOME/scene-policy/applied.json" | tr '\n' ' ' | sed 's/ *$//')"
+not_contains "task-gate-less moods leave the desk's units alone" "--user stop obsidian" "$(stopper)"
+not_contains "and nothing is started during a no-op apply" "--user start" "$(stopper)"
 teardown
 
 echo "a lapsed timed mood reads as neutral and applies nothing"
 setup
-printf '{"mode":"deep","until":"2000-01-01T00:00:00.000Z"}' >"$XDG_STATE_HOME/focus.json"
+printf '{"mode":"work","until":"2000-01-01T00:00:00.000Z"}' >"$XDG_STATE_HOME/focus.json"
 contains "stale until resolves to neutral" "PLAN mood=neutral stop=<none>" "$(run --dry-run 2>&1)"
-teardown
-
-echo "moods with no reachable scene leave the desk's units alone"
-setup
-for mode in neutral chores deep reflect; do
-    printf '{"mode":"%s","until":null}' "$mode" >"$XDG_STATE_HOME/focus.json"
-    run "$mode"
-done
-not_contains "units that only a reachable scene stops are not stopped" "--user stop obsidian" "$(stopper)"
-not_contains "and nothing is started during a no-op apply" "--user start" "$(stopper)"
-teardown
-
-echo "media mood stops exactly its scene's list, nothing more"
-setup
-printf '{"mode":"media","until":null}' >"$XDG_STATE_HOME/focus.json"
-run media
-for unit in $(scan_units media); do
-    contains "media stops $unit" "--user stop $unit" "$(stopper)"
-done
-not_contains "media does not stop the gaming-only unit" "--user stop tmux" "$(stopper)"
 teardown
 
 echo "a prevented background task maps to its contract units at apply time"
 setup
-jq '.moods.game.background.prevent = ["obsidian"]' "$FIXTURE" >"$XDG_STATE_HOME/mood-policy.json"
-printf '{"mode":"game","until":null}' >"$XDG_STATE_HOME/focus.json"
-plan=$(run game --dry-run)
+jq '.moods.gaming.background.prevent = ["obsidian"]' "$FIXTURE" >"$XDG_STATE_HOME/mood-policy.json"
+printf '{"mode":"gaming","until":null}' >"$XDG_STATE_HOME/focus.json"
+plan=$(run gaming --dry-run)
 for unit in $(jq -r '.tasks.obsidian[]?' "$CONTRACT"); do
     contains "prevented task plans $unit" "would-stop: $unit" "$plan"
 done
+teardown
+
+echo "a veto holds a stop, once, and the transition completes (LEO-256)"
+setup
+jq '.moods.gaming.background.prevent = ["obsidian"]' "$FIXTURE" >"$XDG_STATE_HOME/mood-policy.json"
+printf '{"mode":"gaming","until":null}' >"$XDG_STATE_HOME/focus.json"
+# The unit files its own refusal: mid-work windows, in its own words.
+mkdir -p "$QF_STORE/scene-policy"
+printf '{"%s":{"reason":"indexing a large vault","until":9999999999999}}\n' \
+    "$(jq -r '.tasks.obsidian[0]' "$CONTRACT")" >"$QF_STORE/scene-policy/veto.json"
+run gaming
+not_contains "a vetoing unit is not stopped" "--user stop $(jq -r '.tasks.obsidian[0]' "$CONTRACT")" "$(stopper)"
+vetoes=$(jq -r '.vetoes[0].unit' "$QF_STORE/scene-policy/last.json")
+check "the veto record names the unit" "$(jq -r '.tasks.obsidian[0]' "$CONTRACT")" "$vetoes"
+check "and the reason the unit gave" "indexing a large vault" \
+    "$(jq -r '.vetoes[0].reason' "$QF_STORE/scene-policy/last.json")"
+# The next mood must not "hand the running unit back a start it never lost":
+stopp=$(jq -r '.tasks.obsidian[0]' "$CONTRACT")
+stopped_list=$(jq -r --arg s "$stopp" '.stopped | index($s) // -1' "$QF_STORE/scene-policy/applied.json")
+check "a vetoed unit is not recorded as stopped" "-1" "$stopped_list"
+teardown
+
+echo "an expired veto does not hold"
+setup
+jq '.moods.gaming.background.prevent = ["obsidian"]' "$FIXTURE" >"$XDG_STATE_HOME/mood-policy.json"
+printf '{"mode":"gaming","until":null}' >"$XDG_STATE_HOME/focus.json"
+mkdir -p "$QF_STORE/scene-policy"
+printf '{"%s":{"reason":"stale window","until":1}}\n' \
+    "$(jq -r '.tasks.obsidian[0]' "$CONTRACT")" >"$QF_STORE/scene-policy/veto.json"
+plan=$(run gaming --dry-run)
+not_contains "a lapsed refusal is not honoured" "vetoed" "$plan"
 teardown
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

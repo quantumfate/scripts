@@ -25,8 +25,18 @@
 
 set -euo pipefail
 
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/theme.json"
-RESULT="${XDG_STATE_HOME:-$HOME/.local/state}/theme.result.json"
+# The shared quantum-store directory: every state file this desk keeps lives
+# under one root the environment names (QF_STORE), so a runtime that migrates
+# or relocates its stores does not become a find across $XDG_STATE_HOME.
+ROOT="${QF_STORE:-${XDG_STATE_HOME:-$HOME/.local/state}/quantum-store}"
+LEGACY="${XDG_STATE_HOME:-$HOME/.local/state}/theme.json"
+STATE="$ROOT/theme.json"
+RESULT="$ROOT/theme.result.json"
+# The mode pointer and the declaration live in the same store the shell keeps
+# (the lease is read there, never written — a mode leases, a user points).
+LEGACY_FOCUS="${XDG_STATE_HOME:-$HOME/.local/state}/focus.json"
+FOCUS="$ROOT/focus.json"
+DECLARATION="$ROOT/hyprfocus.json"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wallpapers"
 
@@ -39,10 +49,11 @@ PALETTES=(latte frappe macchiato mocha)
 # setting from the theme name and is what applications actually branch on.
 LIGHT=(latte)
 
-# The six focus modes (spec: focus-modes.json). Mood is set elsewhere (the
+# The declared focus modes (see quickshell's hyprfocus.default.json — the
+# shipped declaration is what enumerates them). Mood is set elsewhere (the
 # shell's focus switcher writes `mood` into theme.json); this script only
 # reads it, to pick a wallpaper — it never sets one itself.
-MOODS=(neutral deep chores reflect game media)
+MOODS=(neutral work study gaming)
 
 die() {
     printf '%s: %s\n' "${0##*/}" "$1" >&2
@@ -50,12 +61,61 @@ die() {
 }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# --- the variant registry (LEO-210's harder half) ----------------------------
+
+# Where the packs ship. The shell's own assets are read from the config root,
+# so the script reads the same documents the Quickshell singletons do — one
+# registry, two readers, no second table to drift apart.
+# Where the packs ship. The shell's own assets are read from the config root,
+# so the script reads the same documents the Quickshell singletons do — one
+# registry, two readers, no second table to drift apart. An override names the
+# packs directory itself (the tests use it); unadorned, the deployment shape
+# is the config root's assets.
+PACKS="${THEME_PACKS_DIR:-}"
+if [ -z "$PACKS" ]; then
+    candidate="$CONFIG/quickshell/quantumfate/assets/packs"
+    [ -d "$candidate" ] && PACKS="$candidate" || PACKS=""
+fi
+
+# The pack that owns a variant, and the template it names the variant with on
+# a surface. Output is either "" (the pack carries no names for that surface —
+# partial coverage, the applier keeps its own shape) or the raw template.
+surface_template() {
+    local variant=$1 surface=$2 f
+    [ -d "$PACKS" ] || return 0
+    for f in "$PACKS"/*.json; do
+        [ -f "$f" ] || continue
+        if jq -e --arg v "$variant" '.variants[$v] != null' "$f" >/dev/null 2>&1; then
+            jq -r --arg s "$surface" '.surfaces[$s] // ""' "$f"
+            return
+        fi
+    done
+}
+
+# The name a variant carries on a surface. Falls back to the template below
+# when the pack does not name it — Catppuccin's shape, which is exactly what
+# the shipped surface assets implement. Substitutes the variant's id, kind and
+# accent so every surface reads its own vocabulary from data, not from these
+# appliers hardcoding one ecosystem's name shape.
+resolve_surface() {
+    local variant=$1 kind=$2 accent=$3 surface=$4 fallback=$5 name
+    name=$(surface_template "$variant" "$surface")
+    [ -n "$name" ] || name="$fallback"
+    name="${name/"{variant}"/$variant}"
+    name="${name/"{kind}"/$kind}"
+    name="${name/"{accent}"/$accent}"
+    printf '%s' "$name"
+}
+
 # --- the store ---------------------------------------------------------------
 
-# Reads one field. jq is a hard dependency of the shell already.
+# Reads one field. jq is a hard dependency of the shell already. The legacy
+# store is the one step back: a store not migrated yet still answers, and the
+# next put moves it.
 get() {
     local key=$1 fallback=${2-}
     [ -f "$STATE" ] || {
+        [ ! -f "$LEGACY" ] || jq -r --arg k "$key" --arg d "$fallback" '.[$k] // $d' "$LEGACY" 2>/dev/null && return
         printf '%s' "$fallback"
         return
     }
@@ -102,6 +162,7 @@ json_array() {
 write_result() {
     local ok=true tmp
     [ ${#RESULT_FAILED[@]} -eq 0 ] || ok=false
+    mkdir -p "$ROOT"
     tmp=$(mktemp "$RESULT.XXXXXX")
     jq -n \
         --argjson ok "$ok" \
@@ -115,8 +176,18 @@ write_result() {
 }
 
 is_palette() {
-    local p=$1
+    local p=$1 f
     for known in "${PALETTES[@]}"; do [ "$p" = "$known" ] && return 0; done
+    # The packs widen the vocabulary (LEO-210/289): any variant the packs
+    # carry is nameable. The appliers' own presence checks hold whether the
+    # surface assets actually exist for it — a leasable name is not a
+    # promise that every surface has the theme.
+    if [ -d "$PACKS" ]; then
+        for f in "$PACKS"/*.json; do
+            [ -f "$f" ] || continue
+            jq -e --arg p "$p" '.variants[$p] != null' "$f" >/dev/null 2>&1 && return 0
+        done
+    fi
     return 1
 }
 
@@ -134,10 +205,40 @@ is_mood() {
 
 # --- which palette --------------------------------------------------------
 
-# `mode: auto` means the sun decides; `manual` means a deliberate pick stands
-# until it is handed back. Resolving here rather than in the timer keeps every
-# entry point agreeing on what "now" looks like.
-resolve() {
+# The pointer, resolved exactly like the mode policy reads it everywhere else:
+# the held mode, or "" at rest — a timed mode whose `until` already passed
+# reads as neutral. Shared by both lease applications (the palette and the
+# wallpaper) so two readers can never disagree about which mode is on.
+lease_state() {
+    local mode until until_ms file="$FOCUS"
+    [ -f "$file" ] || { [ ! -f "$LEGACY_FOCUS" ] || file="$LEGACY_FOCUS"; }
+    [ -f "$file" ] && mode=$(jq -r '.mode // "neutral"' "$file" 2>/dev/null) || mode=neutral
+    until=$(jq -r '.until // ""' "$file" 2>/dev/null)
+    if [ "$mode" != neutral ] && [ -n "$until" ]; then
+        until_ms=$(date -d "$until" +%s%3N 2>/dev/null || echo 0)
+        [ "$(date +%s%3N)" -gt "$until_ms" ] && mode=neutral
+    fi
+    printf '%s' "$mode"
+}
+
+# The palette a mode leases while it runs (LEO-288). The declaration names one
+# in the mode's `presentation`; the pointer (focus.json) says the mode is on,
+# and a timed mode whose `until` already passed reads as neutral — the same
+# rule the mode policy keeps everywhere else. "" means no lease held, and an
+# unknown lease palette reads as no lease: resolution never fails.
+lease() {
+    local mode until until_ms palette
+    mode=$(lease_state)
+    [ "$mode" != neutral ] || return 0
+    palette=$(jq -r --arg m "$mode" '.modes[$m].presentation.palette // ""' "$DECLARATION" 2>/dev/null) || return 0
+    is_palette "$palette" && printf '%s' "$palette" || return 0
+}
+
+# The baseline: the palette the desk shows when no lease is held. `mode: auto`
+# means the sun decides; `manual` means a deliberate pick stands until it is
+# handed back. Resolving here rather than in the timer keeps every entry point
+# agreeing on what "now" looks like.
+baseline() {
     local mode palette
     mode=$(get mode auto)
     if [ "$mode" = "auto" ]; then
@@ -146,6 +247,12 @@ resolve() {
         palette=$(get palette macchiato)
         is_palette "$palette" && printf '%s' "$palette" || printf 'macchiato'
     fi
+}
+
+resolve() {
+    local lease
+    lease=$(lease)
+    if [ -n "$lease" ]; then printf '%s' "$lease"; else baseline; fi
 }
 
 # Sunrise/sunset without a network call or a geolocation dependency: the hours
@@ -192,24 +299,25 @@ AWWW_DAEMON=${THEME_AWWW_DAEMON:-awww-daemon}
 sandboxed() { [ -n "${THEME_GSETTINGS-}" ]; }
 
 apply_kitty() {
-    local palette=$1 conf="$CONFIG/kitty/current-theme.conf"
-    [ -f "$CONFIG/kitty/themes/$palette.conf" ] || {
-        echo "kitty: no theme for $palette"
-        record_failed kitty "no theme for $palette"
+    local palette=$1 conf="$CONFIG/kitty/current-theme.conf" theme
+    theme=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" kitty "$palette")
+    [ -f "$CONFIG/kitty/themes/$theme.conf" ] || {
+        echo "kitty: no theme for $theme"
+        record_failed kitty "no theme for $theme"
         return
     }
     # Remote control is deliberately off in kitty.conf, so this is a file swap
     # plus SIGUSR1, which kitty answers by re-reading its config. Every running
     # window changes colour; no sockets, no open port.
-    ln -sfn "themes/$palette.conf" "$conf"
+    ln -sfn "themes/$theme.conf" "$conf"
     sandboxed || pkill -USR1 -x kitty 2>/dev/null || true
-    echo "kitty: $palette"
+    echo "kitty: $theme"
     record_applied kitty immediate
 }
 
 apply_gtk() {
     local palette=$1 theme scheme
-    theme="catppuccin-$palette-$ACCENT-standard+default"
+    theme=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" gtk "catppuccin-$palette-$ACCENT-standard+default")
     if [ ! -d "/usr/share/themes/$theme" ] && [ ! -d "$HOME/.themes/$theme" ]; then
         echo "gtk: $theme not installed (see the theming role)"
         record_failed gtk "$theme not installed"
@@ -240,7 +348,8 @@ apply_qt() {
     local palette=$1
     # Separate declarations: within one `local`, the earlier assignment has not
     # taken effect yet, so $palette would be empty here.
-    local colors="catppuccin-$palette-$ACCENT"
+    local colors
+    colors=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" qt "catppuccin-$palette-$ACCENT")
     local applied=()
     for v in qt5ct qt6ct; do
         local conf="$CONFIG/$v/$v.conf" scheme="$CONFIG/$v/colors/$colors.conf"
@@ -278,21 +387,23 @@ apply_qt() {
 
 # btop names its theme file outright.
 apply_btop() {
-    local palette=$1 conf="$CONFIG/btop/btop.conf"
+    local palette=$1 theme conf="$CONFIG/btop/btop.conf"
+    theme=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" btop "catppuccin_$palette")
     [ -f "$conf" ] || return 0
-    [ -f "$CONFIG/btop/themes/catppuccin_$palette.theme" ] || return 0
-    sed -i "s|^color_theme = .*|color_theme = \"catppuccin_$palette.theme\"|" "$conf"
-    echo "btop: catppuccin_$palette"
+    [ -f "$CONFIG/btop/themes/$theme.theme" ] || return 0
+    sed -i "s|^color_theme = .*|color_theme = \"$theme.theme\"|" "$conf"
+    echo "btop: $theme"
     record_applied btop immediate
 }
 
 # zathura includes a file by bare name.
 apply_zathura() {
-    local palette=$1 conf="$CONFIG/zathura/zathurarc"
+    local palette=$1 theme conf="$CONFIG/zathura/zathurarc"
+    theme=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" zathura "catppuccin-$palette")
     [ -f "$conf" ] || return 0
-    [ -f "$CONFIG/zathura/catppuccin-$palette" ] || return 0
-    sed -i "s|^include catppuccin-.*|include catppuccin-$palette|" "$conf"
-    echo "zathura: catppuccin-$palette"
+    [ -f "$CONFIG/zathura/$theme" ] || return 0
+    sed -i "s|^include catppuccin-.*|include $theme|" "$conf"
+    echo "zathura: $theme"
     record_applied zathura immediate
 }
 
@@ -306,20 +417,23 @@ apply_rofi() {
     [ -f "$conf" ] || return 0
     is_light "$palette" && icons="Papirus-Light" || icons="Papirus-Dark"
     sed -i "s|^\( *icon-theme: *\).*|\1\"$icons\";|" "$conf"
-    if [ -f "$custom" ] && [ -f "$HOME/.local/share/rofi/themes/catppuccin-$palette.rasi" ]; then
-        sed -i "s|^@import .*|@import \"catppuccin-$palette\"|" "$custom"
+    local rasi
+    rasi=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" rofi "catppuccin-$palette")
+    if [ -f "$custom" ] && [ -f "$HOME/.local/share/rofi/themes/$rasi.rasi" ]; then
+        sed -i "s|^@import .*|@import \"$rasi\"|" "$custom"
     fi
-    echo "rofi: catppuccin-$palette ($icons)"
+    echo "rofi: $rasi ($icons)"
     record_applied rofi immediate
 }
 
 # wlogout hardcodes the flavour inside every icon path.
 apply_wlogout() {
-    local palette=$1 css="$CONFIG/wlogout/style.css"
+    local palette=$1 theme css="$CONFIG/wlogout/style.css"
+    theme=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" wlogout "$palette")
     [ -f "$css" ] || return 0
-    [ -d "$CONFIG/wlogout/catppuccin/icons/wlogout/$palette" ] || return 0
-    sed -i -E "s#(/wlogout/catppuccin/icons/wlogout/)[a-z]+/#\\1$palette/#g" "$css"
-    echo "wlogout: $palette"
+    [ -d "$CONFIG/wlogout/catppuccin/icons/wlogout/$theme" ] || return 0
+    sed -i -E "s#(/wlogout/catppuccin/icons/wlogout/)[a-z]+/#\\1$theme/#g" "$css"
+    echo "wlogout: $theme"
     record_applied wlogout immediate
 }
 
@@ -338,8 +452,50 @@ apply_zen() {
     record_pending zen next-launch "user.js is read once at launch"
 }
 
-# The cursor is the one thing that used to need a re-login.
+# Obsidian reads its vault's appearance.json at launch, so this lands on the
+# next restart — the same tier zen lives on. The mapping is the palette's
+# accent and light-ness: the CSS theme stays Catppuccin (already chosen in the
+# vault), which is what makes a manual retheme afterwards an error worth
+# avoiding.
 #
+# The vault is nameable rather than discovered: a single declared vault keeps
+# the adapter one edit behind the truth instead of guessing which of several
+# looks themed. `bin/,obsidian-cli-wrapper.sh` names the same Main vault, so
+# the two paths already agree on the source.
+apply_obsidian() {
+    local palette=$1 vault="${OBSIDIAN_VAULT:-$HOME/Documents/Obsidian/Main}" base appearance
+    appearance="$vault/.obsidian/appearance.json"
+    [ -f "$appearance" ] || {
+        echo "obsidian: $appearance not found"
+        record_failed obsidian "vault appearance.json not found"
+        return 0
+    }
+    # `theme` is Obsidian's base-look key: moonstone wants a light palette,
+    # obsidian a dark one — the same question is_light answers everywhere else.
+    base=$(is_light "$palette" && echo moonstone || echo obsidian)
+    if ! jq --arg base "$base" --arg accent "$(accent_hex "$palette")" \
+        '.theme = $base | .accentColor = $accent' "$appearance" >"$appearance.tmp" ||
+        ! mv -f "$appearance.tmp" "$appearance"; then
+        record_failed obsidian "appearance.json is not writable"
+        return 0
+    fi
+    echo "obsidian: $base + accent (applies on next launch)"
+    record_pending obsidian next-launch "appearance.json is read at launch"
+}
+
+# Linear has no config file this adapter can write: it follows the system
+# colour scheme, which apply_gtk's gsettings call already moved. Recording it
+# is what keeps the tier summary able to say so, instead of nothing appearing
+# and a reader assuming "themed". A scheme change reaches an Electron surface
+# when it restarts, hence the tier.
+apply_linear() {
+    local palette=$1 scheme
+    scheme=$(is_light "$palette" && echo light || echo dark)
+    echo "linear: follows the system colour scheme ($scheme) (applies on next launch)"
+    record_pending linear next-launch "follows the system colour scheme"
+}
+
+# The cursor is the one thing that used to need a re-login.#
 # XCURSOR_THEME lived in ~/.config/environment.d, which systemd --user reads at
 # login and never again — so a palette switch could not move it. Three writes
 # replace that, covering three different audiences:
@@ -353,7 +509,7 @@ apply_zen() {
 # cursor; miss the last and a fresh login has no cursor theme at all.
 apply_cursor() {
     local palette=$1 theme size
-    theme="catppuccin-$palette-$ACCENT-cursors"
+    theme=$(resolve_surface "$palette" "$(is_light "$palette" && echo light || echo dark)" "$ACCENT" cursor "catppuccin-$palette-$ACCENT-cursors")
     size=$(get cursor_size 28)
     if [ ! -d "/usr/share/icons/$theme" ] && [ ! -d "$HOME/.icons/$theme" ] && [ ! -d "$HOME/.local/share/icons/$theme" ]; then
         echo "cursor: $theme not installed"
@@ -467,13 +623,31 @@ process_wallpaper() {
 }
 
 # Which wallpaper this palette should show: mood binding, then palette binding,
-# then the single fallback, then <palette>.jpg. Shared with `status` so the two
-# can never disagree about what is bound.
+# then the single fallback, then <palette>.jpg. A palette with none of those is
+# legitimate configuration, so the last fallback is a random pick from the
+# wallpapers directory — the same semantics `,wallpaper.sh` gives a user who
+# asked for anything — rather than an error. The pick is not persisted: a
+# binding is a user decision, and applying it instead of forgetting it would
+# re-roll on every palette switch. Shared with `status` so the two can never
+# disagree about what is bound.
 resolve_wallpaper() {
-    local palette=$1 mood wall
-    mood=$(get mood "")
-    if [ -n "$mood" ]; then
-        wall=$(jq -r --arg m "$mood" '.moods[$m] // ""' "$STATE" 2>/dev/null || echo "")
+    local palette=$1 mood wall mode lease_wall
+    # The mode's wallpaper lease (LEO-289) sits above the paint binding and
+    # the palette binding, the same way the palette lease sits above the
+    # baseline: a mode that needs a specific look names the file, and hands
+    # it back when the mode ends. But a mood's own binding — the wallpaper a
+    # user bound to that mood — outranks the lease, the same way an explicit
+    # pick outranks a lease for the palette itself.
+    if [ -z "${wall:-}" ]; then
+        mood=$(get mood "")
+        if [ -n "$mood" ]; then
+            wall=$(jq -r --arg m "$mood" '.moods[$m] // ""' "$STATE" 2>/dev/null || echo "")
+        fi
+    fi
+    mode=$(lease_state)
+    if [ "$mode" != neutral ]; then
+        lease_wall=$(jq -r --arg m "$mode" '.modes[$m].presentation.wallpaper // ""' "$DECLARATION" 2>/dev/null || echo "")
+        [ -n "$lease_wall" ] && [ -z "${wall:-}" ] && wall="$lease_wall"
     fi
     [ -n "${wall:-}" ] || wall=$(jq -r --arg p "$palette" '.wallpapers[$p] // ""' "$STATE" 2>/dev/null || echo "")
     [ -n "$wall" ] || wall=$(get wallpaper "")
@@ -485,6 +659,11 @@ resolve_wallpaper() {
                 break
             }
         done
+    fi
+    if [ -z "$wall" ]; then
+        wall=$(find "$CONFIG/hypr/wallpapers" -maxdepth 1 -type f \
+            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) 2>/dev/null |
+            shuf -n 1)
     fi
     printf '%s' "$wall"
 }
@@ -543,11 +722,15 @@ accent_hex() {
 # --- commands ----------------------------------------------------------------
 
 cmd_apply() {
-    local palette
+    local palette baseline
     palette=$(resolve)
-    # Keep the resolved palette in the store so the shell and the script never
-    # disagree about what is showing, even in auto mode.
-    put "$(jq -n --arg p "$palette" '{palette: $p}')"
+    baseline=$(baseline)
+    # Keep the BASELINE in the store so the shell and the script never
+    # disagree about what the desk shows with no lease held, even in auto
+    # mode. A lease is never written here: a mode holds a palette the way it
+    # holds a window, and when the mode ends the store still points at what
+    # the sun (or the user) chose — a mood must not bury the baseline.
+    put "$(jq -n --arg p "$baseline" '{palette: $p}')"
 
     apply_kitty "$palette"
     apply_gtk "$palette"
@@ -559,6 +742,8 @@ cmd_apply() {
     apply_rofi "$palette"
     apply_wlogout "$palette"
     apply_zen "$palette"
+    apply_obsidian "$palette"
+    apply_linear "$palette"
     apply_wallpaper "$palette"
 
     # Last, so it reflects every applier above it. A sandboxed run records

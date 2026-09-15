@@ -59,7 +59,9 @@ setup() {
     chmod +x "$ROOT/gsettings"
     export THEME_GSETTINGS="$ROOT/gsettings"
     : >"$GSETTINGS_LOG"
-    mkdir -p "$XDG_CONFIG_HOME"/{kitty/themes,qt5ct/colors,qt6ct/colors,Kvantum} "$XDG_STATE_HOME"
+    # The script keeps its store files in the shared quantum-store directory
+    # under the redirected state home — the same layout the real desk has.
+    mkdir -p "$XDG_CONFIG_HOME"/{kitty/themes,qt5ct/colors,qt6ct/colors,Kvantum} "$XDG_STATE_HOME/quantum-store"
 
     for flavour in latte frappe macchiato mocha; do
         touch "$XDG_CONFIG_HOME/kitty/themes/$flavour.conf"
@@ -75,7 +77,7 @@ setup() {
         "$XDG_CONFIG_HOME" >"$XDG_CONFIG_HOME/qt5ct/qt5ct.conf"
     printf '[General]\ntheme=catppuccin-macchiato-mauve\n' >"$XDG_CONFIG_HOME/Kvantum/kvantum.kvconfig"
 
-    STORE="$XDG_STATE_HOME/theme.json"
+    STORE="$XDG_STATE_HOME/quantum-store/theme.json"
 }
 
 teardown() {
@@ -291,11 +293,33 @@ contains "no binding falls back to the single wallpaper" "single.png" "$(cat "$A
 contains "a palette binding outranks the bare fallback" "palette.png" "$(cat "$AWWW_LOG")"
 
 # A mood binding outranks the palette binding, even though both are set.
-"$THEME" mood-wallpaper "$ROOT/mood.png" deep >/dev/null
-jq '.mood = "deep"' "$STORE" >"$STORE.tmp" && mv "$STORE.tmp" "$STORE"
+"$THEME" mood-wallpaper "$ROOT/mood.png" work >/dev/null
+jq '.mood = "work"' "$STORE" >"$STORE.tmp" && mv "$STORE.tmp" "$STORE"
 : >"$AWWW_LOG"
 "$THEME" apply >/dev/null
 contains "mood wins over the bound palette" "mood.png" "$(cat "$AWWW_LOG")"
+unset THEME_MAGICK THEME_AWWW THEME_AWWW_DAEMON AWWW_LOG
+teardown
+
+echo "wallpaper resolution: an unbound palette fails open to a random pick"
+setup
+export THEME_MAGICK="$ROOT/no-such-magick-binary"
+awww_stub
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers"
+printf 'fallback' >"$XDG_CONFIG_HOME/hypr/wallpapers/rain.png"
+# frappe has no binding, no bare fallback, no frappe.jpg — the pick answers.
+printf '{"palette":"frappe"}\n' >"$STORE"
+"$THEME" apply >/dev/null
+contains "an unbound palette falls open to the wallpapers directory" "rain.png" "$(cat "$AWWW_LOG")"
+check "the random pick is not persisted as a binding" "0" \
+    "$(jq -r '.wallpapers // {} | length' "$STORE")"
+: >"$AWWW_LOG"
+"$THEME" apply >/dev/null
+contains "a second unbound apply still answers" "rain.png" "$(cat "$AWWW_LOG")"
+
+rm -f "$XDG_CONFIG_HOME/hypr/wallpapers"/*
+"$THEME" apply >"$ROOT/out" 2>&1
+contains "an empty wallpaper directory still reports unchanged" "wallpaper: unchanged" "$(cat "$ROOT/out")"
 unset THEME_MAGICK THEME_AWWW THEME_AWWW_DAEMON AWWW_LOG
 teardown
 
@@ -310,6 +334,25 @@ else
     printf '  ok   an unknown mood is refused\n'
     pass=$((pass + 1))
 fi
+teardown
+
+echo "obsidian/linear: recorded as the tiered surfaces they are"
+setup
+mkdir -p "$ROOT/vault/.obsidian"
+printf '{"cssTheme":"Catppuccin","accentColor":"","theme":"obsidian"}\n' >"$ROOT/vault/.obsidian/appearance.json"
+export OBSIDIAN_VAULT="$ROOT/vault"
+"$THEME" set mocha >"$ROOT/out" 2>&1
+check "obsidian got the dark base" "obsidian" "$(jq -r '.theme' "$ROOT/vault/.obsidian/appearance.json")"
+check "obsidian got the palette accent" "#cba6f7" "$(jq -r '.accentColor' "$ROOT/vault/.obsidian/appearance.json")"
+contains "obsidian is reported as next-launch, not immediate" "applies on next launch" "$(cat "$ROOT/out")"
+contains "linear is reported as scheme-following" "linear: follows the system colour scheme (dark)" "$(cat "$ROOT/out")"
+"$THEME" set latte >"$ROOT/out" 2>&1
+check "latte asks for the light base" "moonstone" "$(jq -r '.theme' "$ROOT/vault/.obsidian/appearance.json")"
+contains "linear follows a light scheme too" "linear: follows the system colour scheme (light)" "$(cat "$ROOT/out")"
+rm -rf "$ROOT/vault"
+"$THEME" set mocha >"$ROOT/out" 2>&1
+contains "a missing vault is failed, not silent" "obsidian:" "$(cat "$ROOT/out")"
+unset OBSIDIAN_VAULT
 teardown
 
 echo "crossfade: awww is asked for a transition, not a hard cut"
@@ -334,5 +377,159 @@ contains "wallpaper apply reports skipped, not attempted" "skipped (sandboxed)" 
 unset THEME_MAGICK
 teardown
 
+echo "a pack-names a variant the appliers do not (LEO-210's harder half)"
+setup
+# The scratch pack dir: a gruvbox pack shipping partial coverage — the kitty
+# surface named, the others not.
+PACKS="$XDG_STATE_HOME/packs"
+export THEME_PACKS_DIR="$PACKS"
+mkdir -p "$PACKS"
+cat >"$PACKS/gruvbox.json" <<'PACK'
+{
+  "pack": "gruvbox",
+  "accents": {
+    "lavender": "base16", "blue": "base0d", "peach": "base09",
+    "mauve": "base0e", "green": "base0b", "pink": "base17", "teal": "base0c"
+  },
+  "names": { "base": "base00" },
+  "surfaces": { "kitty": "gruvbox-material-{variant}" },
+  "variants": {
+    "gruvbox-material": {
+      "kind": "dark",
+      "slots": {
+        "base00": "#282828", "base01": "#3c3836", "base02": "#504945",
+        "base03": "#665c54", "base04": "#928374", "base05": "#ebdbb2",
+        "base06": "#fbf1c7", "base07": "#f9f5d7", "base08": "#cc241d",
+        "base09": "#d65d0e", "base0a": "#d79921", "base0b": "#98971a",
+        "base0c": "#689d6a", "base0d": "#458588", "base0e": "#b16286",
+        "base0f": "#9d0006", "base10": "#2a2520", "base11": "#1d1d1d",
+        "base12": "#fb4934", "base13": "#fabd2f", "base14": "#b8bb26",
+        "base15": "#8ec07c", "base16": "#83a598", "base17": "#d3869b"
+      }
+    }
+  }
+}
+PACK
+# The surface assets carry what the pack names: kitty has the theme under the
+# registry's own name shape.
+mkdir -p "$XDG_CONFIG_HOME/kitty/themes"
+touch "$XDG_CONFIG_HOME/kitty/themes/gruvbox-material-gruvbox-material.conf"
+
+# The shell's theme.json + mode pointer lease it through the whole desk.
+STORE="$XDG_STATE_HOME/quantum-store/theme.json"
+printf '{"palette":"mocha","mode":"manual"}\n' >"$STORE"
+printf '{"modes":{"gaming":{"name":"gaming","presentation":{"palette":"gruvbox-material"}}}}\n' \
+    >"$XDG_STATE_HOME/quantum-store/hyprfocus.json"
+printf '{"mode":"gaming","until":null}' >"$XDG_STATE_HOME/quantum-store/focus.json"
+
+get=$("$THEME" get)
+check "the lease resolves through the pack" "gruvbox-material" "$get"
+"$THEME" apply >/dev/null
+check "the kitty surface reads the pack's own name" "themes/gruvbox-material-gruvbox-material.conf" \
+    "$(readlink "$XDG_CONFIG_HOME/kitty/current-theme.conf")"
+
+# Partial coverage is normal, not a failure of the apply: a surface the pack
+# does not name keeps its own shape and records the gap.
+out=$("$THEME" apply 2>&1)
+contains "the unnamed surface records a named failure, not a crash" \
+    "gtk: catppuccin-gruvbox-material-mauve-standard+default not installed" "$out"
+teardown
+
+echo "a mode leases its wallpaper, above the palette binding and under the mood's"
+setup
+mkdir -p "$XDG_CONFIG_HOME/hypr/wallpapers" "$XDG_STATE_HOME/quantum-store"
+touch "$XDG_CONFIG_HOME/hypr/wallpapers/mocha.jpg" "$XDG_CONFIG_HOME/hypr/wallpapers/gaming.jpg"
+STORE="$XDG_STATE_HOME/quantum-store/theme.json"
+printf '{"mode":"manual","palette":"mocha","day":"latte","night":"mocha"}\n' >"$STORE"
+printf '{"modes":{"gaming":{"name":"gaming","presentation":{"wallpaper":"/w-LEASE.jpg"}}}}\n' \
+    >"$XDG_STATE_HOME/quantum-store/hyprfocus.json"
+
+# At rest the palette's own binding answers; the mood's own binding — a user
+# decision — outranks the lease; the lease outranks the palette binding.
+"$THEME" wallpaper "$XDG_CONFIG_HOME/hypr/wallpapers/mocha.jpg" mocha >/dev/null
+contains "at rest the palette binding answers" \
+    "wallpaper $XDG_CONFIG_HOME/hypr/wallpapers/mocha.jpg" "$("$THEME" status)"
+
+printf '{"mode":"gaming","until":null}' >"$XDG_STATE_HOME/quantum-store/focus.json"
+contains "a held lease binds its own look" "wallpaper /w-LEASE.jpg" "$("$THEME" status)"
+
+# A user decision outranks the declared one. The 'mood' pointer is what
+# `cmd_mood_wallpaper` (and the shell switcher) write, so the chain reads the
+# mood the way the shell already does.
+jq '. + {mood: "gaming"}' "$STORE" >"$STORE.tmp" && mv "$STORE.tmp" "$STORE"
+"$THEME" mood-wallpaper "$XDG_CONFIG_HOME/hypr/wallpapers/gaming.jpg" gaming >/dev/null
+contains "the mood's own binding outranks the lease" \
+    "wallpaper $XDG_CONFIG_HOME/hypr/wallpapers/gaming.jpg" "$("$THEME" status)"
+teardown
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
+
+echo "a mode leases a palette while it runs"
+setup
+printf '{"mode":"manual","palette":"mocha","day":"latte","night":"macchiato"}\n' >"$STORE"
+# The pointer is one store the script never writes: a live mode (no `until`)
+# whose declaration names a palette in its presentation.
+printf '{"modes":{"gaming":{"name":"Gaming","presentation":{"palette":"latte"}}}}\n' \
+    >"$XDG_STATE_HOME/quantum-store/hyprfocus.json"
+printf '{"mode":"gaming","until":null}\n' \
+    >"$XDG_STATE_HOME/quantum-store/focus.json"
+
+# The lease is in effect: the manual pick (mocha) must not win while the mode
+# holds, whatever the store's pointer says.
+check "a held lease is found" "latte" "$("$THEME" get)"
+"$THEME" apply >/dev/null
+check "kitty points at the leased palette" "themes/latte.conf" \
+    "$(readlink "$XDG_CONFIG_HOME/kitty/current-theme.conf")"
+
+# The lease replaces the pointer in effect, never the pointer itself: the
+# store's palette and mode survive the apply untouched, so when the mode ends
+# the sun's or the user's choice comes back.
+check "the baseline palette is intact" "mocha" "$(field palette)"
+check "the baseline mode is intact" "manual" "$(field mode)"
+
+# Not holding: leaving the mode (the pointer going neutral) resolves again
+# from the baseline.
+printf '{"mode":"neutral","until":null}\n' \
+    >"$XDG_STATE_HOME/quantum-store/focus.json"
+check "the lease is given back when the mode ends" "mocha" "$("$THEME" get)"
+
+# A timed mode whose `until` already passed reads as neutral — the same rule
+# the mode policy keeps everywhere else.
+printf '{"mode":"gaming","until":"2020-01-01T00:00:00Z"}\n' \
+    >"$XDG_STATE_HOME/quantum-store/focus.json"
+check "a lapsed lease resolves from the baseline" "mocha" "$("$THEME" get)"
+
+# An unknown lease palette reads as none — resolution never fails.
+printf '{"mode":"gaming","until":null}\n' \
+    >"$XDG_STATE_HOME/quantum-store/focus.json"
+printf '{"modes":{"gaming":{"name":"Gaming","presentation":{"palette":"dracula"}}}}\n' \
+    >"$XDG_STATE_HOME/quantum-store/hyprfocus.json"
+check "an unknown lease falls to the baseline" "mocha" "$("$THEME" get)"
+
+# No declaration at all: no lease, no crash.
+rm "$XDG_STATE_HOME/quantum-store/hyprfocus.json"
+check "a missing declaration still resolves" "mocha" "$("$THEME" get)"
+teardown
+
+echo "auto mode keeps resolving under the lease"
+setup
+printf '{"mode":"auto","day":"latte","night":"mocha","palette":"frappe"}\n' >"$STORE"
+printf '{"modes":{"gaming":{"name":"Gaming","presentation":{"palette":"frappe"}}}}\n' \
+    >"$XDG_STATE_HOME/quantum-store/hyprfocus.json"
+printf '{"mode":"gaming","until":null}\n' \
+    >"$XDG_STATE_HOME/quantum-store/focus.json"
+# Whatever the sun picks, the store's pointer follows it: so the lease ending
+# later hands the desk back to the same palette the sun would have applied.
+"$THEME" apply >/dev/null
+case "$(field palette)" in
+latte | mocha)
+    printf '  ok   the store pointer follows the sun (%s)\n' "$(field palette)"
+    pass=$((pass + 1))
+    ;;
+*)
+    printf '  FAIL auto pointer moved to %s, expected a day/night palette\n' "$(field palette)"
+    fail=$((fail + 1))
+    ;;
+esac
+teardown

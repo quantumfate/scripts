@@ -45,3 +45,5 @@ units:
 
 # CI/pre-commit gate. lint-py stays out until its findings are cleared.
 check: fmt-check lint test
+	@../hypr/bin/,privacy-check
+
