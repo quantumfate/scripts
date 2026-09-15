@@ -75,7 +75,10 @@
 set -euo pipefail
 
 TMS_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/tms/config.toml"
-PROJECTS_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/projects.json"
+# The shared quantum-store directory (QF_STORE), with the legacy read as the
+# migration step back.
+QF_ROOT="${QF_STORE:-${XDG_STATE_HOME:-$HOME/.local/state}/quantum-store}"
+PROJECTS_JSON="$QF_ROOT/projects.json"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/proj-list"
 CACHE_TTL=300
 TEMPLATE_WINDOWS=(nvim zsh run)
@@ -101,7 +104,7 @@ die() {
     if [[ -n ${TMUX-} ]]; then
         command tmux display-message "proj: $1" 2>/dev/null || true
     elif command -v notify-send >/dev/null 2>&1; then
-        notify-send -u critical "proj" "$1" 2>/dev/null || true
+        ,notify proj -u critical "" "$1" 2>/dev/null || true
     fi
     exit 1
 }
