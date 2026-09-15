@@ -225,7 +225,6 @@ Before marking work complete:
 - Do not silently widen scope. Create or propose follow-up issues for
   additional work.
 
-
 ## This repo
 
 The scripts tree mirrors parts of hypr's `bin/` and `tests/` — where a copy
