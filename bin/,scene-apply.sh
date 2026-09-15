@@ -94,6 +94,24 @@ log() {
         --arg action "$action" --arg unit "$unit" --arg outcome "$outcome" \
         '{ts: ($ts | tonumber), mood: $mood, action: $action, unit: $unit, outcome: $outcome}' \
         >>"$log_file"
+    trim_log
+}
+
+# Bounded retention (LEO-241): the log is a diary of the day, not a record
+# of years. After each append, the file is trimmed to its LAST MAX rows —
+# bounded, stated in schemas/scene-policy.schema.json, and never trimming
+# while a dry run is in flight (a plan appends nothing).
+trim_log() {
+    [ "$dry_run" = 1 ] && return 0
+    [ -f "$log_file" ] || return 0
+    local lines max keep
+    lines=$(wc -l <"$log_file")
+    max=2000
+    [ "$lines" -gt "$max" ] || return 0
+    keep=$((max / 2))
+    tmp="$log_file.tmp"
+    tail -n "$keep" "$log_file" >"$tmp"
+    mv "$tmp" "$log_file"
 }
 
 # Resolve the mood for this apply: an explicit arg wins (tests/manual runs);
@@ -271,11 +289,12 @@ if [ "$dry_run" != 1 ] && [ -x "$SCRIPT_DIR/,hyprfocus-units" ]; then
     else
         while IFS= read -r line; do
             case "$line" in
-            "not installed: "*) unit=${line#"not installed: "}
+            "not installed: "*)
+                unit=${line#"not installed: "}
                 log units "$unit" "not-installed"
                 ;;
             esac
-        done <<< "$out"
+        done <<<"$out"
         log units "gate" "declared units missing from the running manager"
     fi
 fi
