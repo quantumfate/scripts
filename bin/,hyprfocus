@@ -514,9 +514,7 @@ def main() -> None:
         "conform", help="run shared resolver conformance fixtures"
     )
     conform_parser.add_argument("source", type=Path)
-    log_parser = sub.add_parser(
-        "log", help="print the scene-policy log's recent rows"
-    )
+    log_parser = sub.add_parser("log", help="print the scene-policy log's recent rows")
     log_parser.add_argument("count", nargs="?", type=int, default=20)
     for verb, help_text in (
         ("resolve", "the desk a mode means"),
